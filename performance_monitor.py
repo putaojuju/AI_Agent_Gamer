@@ -4,6 +4,7 @@
 用于监控脚本运行时的性能指标，包括CPU、内存、截图耗时等
 """
 
+import os
 import time
 import psutil
 import logging
@@ -11,11 +12,15 @@ from collections import deque
 from datetime import datetime
 
 # 配置日志
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('performance_monitor.log', encoding='utf-8'),
+        logging.FileHandler(os.path.join(log_dir, 'performance_monitor.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )

@@ -4,6 +4,7 @@
 实现显示器信息获取、虚拟屏幕创建和管理功能
 """
 
+import os
 import win32gui
 import win32con
 import win32api
@@ -12,11 +13,15 @@ import logging
 import time
 
 # 配置日志
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('virtual_display.log', encoding='utf-8'),
+        logging.FileHandler(os.path.join(log_dir, 'virtual_display.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )

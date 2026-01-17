@@ -4,6 +4,7 @@
 实现游戏窗口的自动检测、定位和管理功能
 """
 
+import os
 import win32gui
 import win32con
 import logging
@@ -11,11 +12,15 @@ import time
 from virtual_display import virtual_display_manager
 
 # 配置日志
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('game_window_manager.log', encoding='utf-8'),
+        logging.FileHandler(os.path.join(log_dir, 'game_window_manager.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )

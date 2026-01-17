@@ -19,11 +19,15 @@ from independent_mouse import independent_mouse
 from performance_monitor import performance_monitor
 
 # 配置日志系统
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('background_windows.log', encoding='utf-8'),
+        logging.FileHandler(os.path.join(log_dir, 'background_windows.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )

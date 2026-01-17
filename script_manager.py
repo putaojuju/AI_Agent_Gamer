@@ -53,11 +53,15 @@ class RECT(ctypes.Structure):
     ]
 
 # 配置日志系统
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('script_manager.log', encoding='utf-8'),
+        logging.FileHandler(os.path.join(log_dir, 'script_manager.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -327,10 +331,10 @@ class ScriptManager:
         self.scripts = []
         project_root = os.path.dirname(os.path.abspath(__file__))
         
-        # 定义搜索路径
+        # 定义搜索路径 (更新为games文件夹结构)
         search_paths = [
-            os.path.join(project_root, "twinkle_starknightsX", "daily", "daily.py"),
-            os.path.join(project_root, "Girls_Creation_script", "dungeon", "dungeon.py"),
+            os.path.join(project_root, "games", "twinkle_starknightsX_script", "daily", "daily.py"),
+            os.path.join(project_root, "games", "Girls_Creation_script", "dungeon", "dungeon.py"),
             os.path.join(project_root, "test_embed_operation.py")
         ]
         
