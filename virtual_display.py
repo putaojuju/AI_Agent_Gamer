@@ -85,8 +85,26 @@ class VirtualDisplayManager:
         for display in self.displays:
             logger.debug(f"显示器 {display['id']}: {display['name']}, 位置: ({display['left']}, {display['top']}), 大小: {display['width']}x{display['height']}, 主屏幕: {display['is_primary']}, 已连接: {display.get('is_attached', True)}")
         
-        # 不再创建默认虚拟屏幕，只使用真实检测到的显示器
-        # 如果需要虚拟屏幕，请先安装Parsec VDD Driver并使用parsec-vdd-cli创建
+        # 如果没有找到虚拟屏幕，尝试创建一个默认的虚拟屏幕
+        if not self.virtual_display and self.main_display:
+            logger.info("没有检测到虚拟屏幕，尝试创建默认虚拟屏幕")
+            # 假设虚拟屏幕位于主屏幕右侧
+            default_virtual_display = {
+                'id': len(self.displays),
+                'name': r'\.\DISPLAY2',
+                'device_string': '默认虚拟屏幕',
+                'is_primary': False,
+                'left': self.main_display['width'],
+                'top': 0,
+                'width': self.main_display['width'],
+                'height': self.main_display['height'],
+                'refresh_rate': self.main_display['refresh_rate'],
+                'bit_depth': self.main_display['bit_depth'],
+                'is_attached': False
+            }
+            self.displays.append(default_virtual_display)
+            self.virtual_display = default_virtual_display
+            logger.info(f"创建默认虚拟屏幕: {default_virtual_display['width']}x{default_virtual_display['height']}")
     
     def get_displays(self):
         """

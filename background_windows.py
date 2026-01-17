@@ -276,17 +276,26 @@ class BackgroundWindows(Windows):
             logger.debug(f"触摸操作 - 窗口位置：({window_left}, {window_top})")
             
             # 获取屏幕坐标
+            # 注意：Airtest的Template匹配返回的坐标是相对于snapshot图片的
+            # 因为我们的snapshot方法截取的是窗口内容（包含标题栏），所以这里的pos是相对于窗口左上角的坐标
+            # 我们需要将其转换为绝对屏幕坐标，以便后续ScreenToClient能正确工作
             if isinstance(pos, (list, tuple)):
-                screen_x, screen_y = pos
-                logger.debug(f"触摸操作 - 直接使用列表/元组坐标：({screen_x}, {screen_y})")
+                rel_x, rel_y = pos
+                screen_x = window_left + rel_x
+                screen_y = window_top + rel_y
+                logger.debug(f"触摸操作 - 相对坐标转屏幕坐标：({rel_x}, {rel_y}) -> ({screen_x}, {screen_y})")
             elif hasattr(pos, 'match_result') and pos.match_result:
-                screen_x, screen_y = pos.match_result['result']
-                logger.debug(f"触摸操作 - 从match_result获取坐标：({screen_x}, {screen_y})")
+                rel_x, rel_y = pos.match_result['result']
+                screen_x = window_left + rel_x
+                screen_y = window_top + rel_y
+                logger.debug(f"触摸操作 - match_result相对坐标转屏幕坐标：({rel_x}, {rel_y}) -> ({screen_x}, {screen_y})")
             else:
                 # 尝试转换为坐标
                 try:
-                    screen_x, screen_y = tuple(pos)
-                    logger.debug(f"触摸操作 - 转换为元组坐标：({screen_x}, {screen_y})")
+                    rel_x, rel_y = tuple(pos)
+                    screen_x = window_left + rel_x
+                    screen_y = window_top + rel_y
+                    logger.debug(f"触摸操作 - 转换为元组坐标并转屏幕坐标：({rel_x}, {rel_y}) -> ({screen_x}, {screen_y})")
                 except Exception as e:
                     logger.error(f"触摸操作 - 坐标转换失败：{e}")
                     return False

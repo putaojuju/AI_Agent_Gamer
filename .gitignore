@@ -53,6 +53,9 @@ pytest_cache/
 *.coverage
 coverage.xml
 
-# 其他
-*.md
-!.trae/rules/project_rules.md
+# 私有仓库内容
+games/
+.trae/
+
+# 临时文件夹
+Game_Script_public/
