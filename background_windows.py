@@ -9,10 +9,14 @@ import time
 import win32gui
 import win32con
 import win32api
+import pywintypes
 import logging
+import mss
+import numpy
 from airtest.core.win.win import Windows
 from virtual_display import virtual_display_manager
 from independent_mouse import independent_mouse
+from performance_monitor import performance_monitor
 
 # 配置日志系统
 logging.basicConfig(
@@ -53,6 +57,12 @@ class BackgroundWindows(Windows):
         self.window_display = None
         # 独立鼠标控制器
         self.independent_mouse = independent_mouse
+        # 点击方式配置：'postmessage' 或 'sendinput'
+        self.click_method = 'postmessage'
+        # PostMessage 失败计数器
+        self.postmessage_fail_count = 0
+        # 最大失败次数，超过后切换到 SendInput
+        self.max_postmessage_failures = 3
     
     def init_hwnd(self, hwnd):
         """
@@ -66,30 +76,41 @@ class BackgroundWindows(Windows):
         # 设置当前设备的窗口句柄
         self.handle = hwnd
         
-        # 检查窗口是否为嵌入窗口
-        parent_hwnd = win32gui.GetParent(hwnd)
-        if parent_hwnd:
-            self.is_embedded = True
-            self.embedded_hwnd = hwnd
-            logger.info(f"窗口 {hwnd} 是嵌入窗口，父窗口句柄：{parent_hwnd}")
-        else:
+        try:
+            # 检查窗口是否为嵌入窗口
+            parent_hwnd = win32gui.GetParent(hwnd)
+            if parent_hwnd:
+                self.is_embedded = True
+                self.embedded_hwnd = hwnd
+                logger.info(f"窗口 {hwnd} 是嵌入窗口，父窗口句柄：{parent_hwnd}")
+            else:
+                self.is_embedded = False
+                self.embedded_hwnd = None
+                logger.info(f"窗口 {hwnd} 不是嵌入窗口")
+        except pywintypes.error as e:
+            logger.error(f"获取窗口父句柄失败：{e}")
             self.is_embedded = False
             self.embedded_hwnd = None
-            logger.info(f"窗口 {hwnd} 不是嵌入窗口")
         
-        # 检查窗口所在的显示器
-        virtual_display_manager.update_displays_info()
-        self.window_display = virtual_display_manager.get_window_display(hwnd)
-        # 检查是否在虚拟屏幕上
-        if self.window_display and not self.window_display['is_primary']:
-            self.is_virtual_screen = True
-            logger.info(f"窗口 {hwnd} 在虚拟屏幕上：显示器 {self.window_display['id']}")
-            # 设置独立鼠标的目标显示器
-            self.independent_mouse.set_target_display(self.window_display)
-        else:
+        try:
+            # 检查窗口所在的显示器
+            virtual_display_manager.update_displays_info()
+            self.window_display = virtual_display_manager.get_window_display(hwnd)
+            # 检查是否在虚拟屏幕上
+            if self.window_display and not self.window_display['is_primary']:
+                self.is_virtual_screen = True
+                logger.info(f"窗口 {hwnd} 在虚拟屏幕上：显示器 {self.window_display['id']}")
+                # 设置独立鼠标的目标显示器
+                self.independent_mouse.set_target_display(self.window_display)
+            else:
+                self.is_virtual_screen = False
+                logger.info(f"窗口 {hwnd} 在主屏幕上：显示器 {self.window_display['id']}")
+                # 设置独立鼠标的目标显示器
+                self.independent_mouse.set_target_display(self.window_display)
+        except Exception as e:
+            logger.error(f"检查窗口显示器失败：{e}")
             self.is_virtual_screen = False
-            logger.info(f"窗口 {hwnd} 在主屏幕上：显示器 {self.window_display['id']}")
-            # 设置独立鼠标的目标显示器
+            self.window_display = virtual_display_manager.get_main_display()
             self.independent_mouse.set_target_display(self.window_display)
     
     def _get_screen_coords(self, pos):
@@ -120,6 +141,75 @@ class BackgroundWindows(Windows):
         except (TypeError, ValueError):
             # 无法转换，直接返回
             return pos
+    
+    def snapshot(self, filename=None, quality=10, max_size=None, **kwargs):
+        """
+        获取窗口截图
+        Args:
+            filename: 截图保存文件名
+            quality: 图片质量
+            max_size: 最大尺寸
+            **kwargs: 其他参数
+        Returns:
+            截图数组
+        """
+        logger.debug(f"调用snapshot方法，filename={filename}, hwnd={self.hwnd}")
+        
+        if not self.hwnd:
+            logger.debug("没有窗口句柄，使用父类的默认snapshot方法")
+            return super(BackgroundWindows, self).snapshot(filename, quality, max_size)
+        
+        try:
+            # 获取窗口矩形
+            rect = win32gui.GetWindowRect(self.hwnd)
+            left, top, right, bottom = rect
+            width = right - left
+            height = bottom - top
+            
+            logger.debug(f"窗口矩形：{rect}，尺寸：{width}x{height}")
+            
+            if width <= 0 or height <= 0:
+                logger.error(f"窗口尺寸无效：width={width}, height={height}")
+                return super(BackgroundWindows, self).snapshot(filename, quality, max_size)
+            
+            # 直接使用mss截图，不做复杂计算
+            with mss.mss() as sct:
+                monitor = {
+                    "top": top,
+                    "left": left,
+                    "width": width,
+                    "height": height
+                }
+                
+                logger.debug(f"使用mss.grab截图，monitor={monitor}")
+                sct_img = sct.grab(monitor)
+                logger.debug(f"mss.grab返回：{sct_img}")
+                
+                # 转换为numpy数组
+                screen = numpy.array(sct_img)
+                logger.debug(f"转换为numpy数组：{screen.shape}")
+                
+                # 只保留RGB通道
+                if screen.shape[-1] >= 3:
+                    screen = screen[..., :3]
+                    logger.debug(f"保留RGB通道后：{screen.shape}")
+                
+                # 保存图片（如果需要）
+                if filename:
+                    import aircv
+                    aircv.imwrite(filename, screen, quality, max_size=max_size)
+                    logger.debug(f"已保存截图到：{filename}")
+                
+                return screen
+        except Exception as e:
+            logger.error(f"截图失败：{e}", exc_info=True)
+            # 捕获所有异常，返回父类默认实现
+            logger.debug("截图失败，使用父类默认实现")
+            try:
+                return super(BackgroundWindows, self).snapshot(filename, quality, max_size)
+            except Exception as e2:
+                logger.error(f"父类snapshot也失败：{e2}", exc_info=True)
+                return None
     
     def _get_embedded_window_coords(self, pos):
         """
@@ -180,37 +270,122 @@ class BackgroundWindows(Windows):
             client_height = client_rect[3]
             logger.debug(f"触摸操作 - 客户区大小：{client_width}x{client_height}")
             
-            # 直接使用Airtest提供的坐标，确保它是相对客户区的
+            # 获取窗口在屏幕上的位置
+            window_rect = win32gui.GetWindowRect(self.hwnd)
+            window_left, window_top = window_rect[0], window_rect[1]
+            logger.debug(f"触摸操作 - 窗口位置：({window_left}, {window_top})")
+            
+            # 获取屏幕坐标
             if isinstance(pos, (list, tuple)):
-                client_x, client_y = pos
-                logger.debug(f"触摸操作 - 直接使用列表/元组坐标：({client_x}, {client_y})")
+                screen_x, screen_y = pos
+                logger.debug(f"触摸操作 - 直接使用列表/元组坐标：({screen_x}, {screen_y})")
             elif hasattr(pos, 'match_result') and pos.match_result:
-                client_x, client_y = pos.match_result['result']
-                logger.debug(f"触摸操作 - 从match_result获取坐标：({client_x}, {client_y})")
+                screen_x, screen_y = pos.match_result['result']
+                logger.debug(f"触摸操作 - 从match_result获取坐标：({screen_x}, {screen_y})")
             else:
                 # 尝试转换为坐标
                 try:
-                    client_x, client_y = tuple(pos)
-                    logger.debug(f"触摸操作 - 转换为元组坐标：({client_x}, {client_y})")
+                    screen_x, screen_y = tuple(pos)
+                    logger.debug(f"触摸操作 - 转换为元组坐标：({screen_x}, {screen_y})")
                 except Exception as e:
                     logger.error(f"触摸操作 - 坐标转换失败：{e}")
                     return False
             
-            # 确保坐标在客户区范围内
-            client_x = max(0, min(int(client_x), client_width - 1))
-            client_y = max(0, min(int(client_y), client_height - 1))
+            # 对于嵌入窗口，直接使用Airtest提供的客户区坐标
+            if self.is_embedded:
+                # Airtest已经返回客户区坐标，直接使用
+                client_x = int(screen_x)
+                client_y = int(screen_y)
+                logger.debug(f"触摸操作 - 嵌入窗口，直接使用客户区坐标：({client_x}, {client_y})")
+            else:
+                # 对于非嵌入窗口，使用ScreenToClient API进行精确转换
+                # 这样可以消除标题栏和边框带来的误差
+                try:
+                    point = win32gui.ScreenToClient(self.hwnd, (screen_x, screen_y))
+                    client_x, client_y = point[0], point[1]
+                    logger.debug(f"触摸操作 - 使用ScreenToClient转换：屏幕({screen_x}, {screen_y}) -> 客户区({client_x}, {client_y})")
+                except Exception as e:
+                    logger.error(f"ScreenToClient转换失败：{e}，使用手动计算作为备选")
+                    # 备选方案：手动计算
+                    client_x = screen_x - window_left
+                    client_y = screen_y - window_top
+                    logger.debug(f"触摸操作 - 手动计算屏幕坐标转客户区坐标：({screen_x}, {screen_y}) -> ({client_x}, {client_y})")
+            
+            # 验证坐标是否在客户区范围内
+            if client_x < 0 or client_x >= client_width:
+                logger.warning(f"触摸操作 - X坐标超出客户区范围：{client_x}，客户区宽度：{client_width}")
+                client_x = max(0, min(client_x, client_width - 1))
+            
+            if client_y < 0 or client_y >= client_height:
+                logger.warning(f"触摸操作 - Y坐标超出客户区范围：{client_y}，客户区高度：{client_height}")
+                client_y = max(0, min(client_y, client_height - 1))
+            
             logger.debug(f"触摸操作 - 调整后坐标：({client_x}, {client_y})")
             
-            # 发送点击消息
-            # 对于虚拟屏幕或嵌入窗口，使用独立鼠标控制器
-            if self.is_virtual_screen or self.is_embedded:
-                logger.info(f"触摸操作 - 使用独立鼠标控制器，点击位置：({client_x}, {client_y})")
-                # 使用独立鼠标进行点击
-                self.independent_mouse.click(client_x, client_y, right_click)
+            # 根据点击方式执行点击
+            if self.click_method == 'postmessage':
+                # 优先使用 PostMessage 方法
+                logger.info(f"触摸操作 - 使用 PostMessage 方法，点击位置：({client_x}, {client_y})")
+                
+                # 记录点击开始时间
+                touch_start = time.time()
+                
+                # 尝试发送 PostMessage 点击
+                postmessage_success = self._send_click_message((client_x, client_y), duration, right_click)
+                
+                if postmessage_success:
+                    # PostMessage 成功，重置失败计数器
+                    self.postmessage_fail_count = 0
+                    logger.debug("PostMessage 点击成功")
+                else:
+                    # PostMessage 失败，增加失败计数器
+                    self.postmessage_fail_count += 1
+                    logger.warning(f"PostMessage 点击失败（失败次数：{self.postmessage_fail_count}/{self.max_postmessage_failures}）")
+                    
+                    # 检查是否需要切换到 SendInput
+                    if self.postmessage_fail_count >= self.max_postmessage_failures:
+                        logger.warning(f"PostMessage 连续失败 {self.max_postmessage_failures} 次，切换到 SendInput 方法")
+                        self.click_method = 'sendinput'
+                        
+                        # 使用 SendInput 方法重试
+                        screen_x, screen_y = self._get_screen_coords(pos)
+                        sendinput_success = self._send_input_click(screen_x, screen_y, duration, right_click)
+                        
+                        if not sendinput_success:
+                            logger.error("SendInput 点击也失败，点击操作失败")
+                            return False
+                    else:
+                        # 还未达到切换阈值，直接返回失败
+                        logger.error("PostMessage 点击失败，点击操作失败")
+                        return False
+                
+                # 记录点击耗时
+                touch_duration = time.time() - touch_start
+                performance_monitor.record_touch(touch_duration)
+                
+                return True
             else:
-                logger.info(f"触摸操作 - 使用窗口消息方法，点击位置：({client_x}, {client_y})")
-                self._send_click_message((client_x, client_y), duration, right_click)
-            return True
+                # 使用 SendInput 方法（鼠标瞬移）
+                logger.info(f"触摸操作 - 使用 SendInput 方法（鼠标瞬移），点击位置：({client_x}, {client_y})")
+                
+                # 记录点击开始时间
+                touch_start = time.time()
+                
+                # 计算屏幕坐标
+                screen_x, screen_y = self._get_screen_coords(pos)
+                
+                # 使用 SendInput 点击
+                sendinput_success = self._send_input_click(screen_x, screen_y, duration, right_click)
+                
+                if not sendinput_success:
+                    logger.error("SendInput 点击失败，点击操作失败")
+                    return False
+                
+                # 记录点击耗时
+                touch_duration = time.time() - touch_start
+                performance_monitor.record_touch(touch_duration)
+                
+                return True
         except Exception as e:
             logger.error(f"后台点击失败：{e}", exc_info=True)
             
@@ -224,34 +399,60 @@ class BackgroundWindows(Windows):
             pos: 点击位置（客户区坐标）
             duration: 点击持续时间
             right_click: 是否右键点击
+        Returns:
+            bool: 是否成功
         """
         x, y = pos
         
-        # 构建坐标参数
-        l_param = y << 16 | x
-        
-        # 发送鼠标移动消息
-        win32gui.PostMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, l_param)
-        
-        # 发送鼠标按下消息
-        if right_click:
-            # 右键点击
-            win32gui.PostMessage(self.hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, l_param)
-        else:
-            # 左键点击
-            win32gui.PostMessage(self.hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, l_param)
-        
-        # 等待指定的点击持续时间
-        time.sleep(duration)
-        
-        # 发送鼠标释放消息
-        if right_click:
-            win32gui.PostMessage(self.hwnd, win32con.WM_RBUTTONUP, 0, l_param)
-        else:
-            win32gui.PostMessage(self.hwnd, win32con.WM_LBUTTONUP, 0, l_param)
-        
-        # 发送鼠标离开消息，确保状态正确
-        win32gui.PostMessage(self.hwnd, win32con.WM_MOUSELEAVE, 0, 0)
+        try:
+            # 构建坐标参数
+            l_param = y << 16 | x
+            
+            # 发送鼠标移动消息
+            win32gui.PostMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, l_param)
+            
+            # 发送鼠标按下消息
+            if right_click:
+                # 右键点击
+                win32gui.PostMessage(self.hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, l_param)
+            else:
+                # 左键点击
+                win32gui.PostMessage(self.hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, l_param)
+            
+            # 等待指定的点击持续时间
+            time.sleep(duration)
+            
+            # 发送鼠标释放消息
+            if right_click:
+                win32gui.PostMessage(self.hwnd, win32con.WM_RBUTTONUP, 0, l_param)
+            else:
+                win32gui.PostMessage(self.hwnd, win32con.WM_LBUTTONUP, 0, l_param)
+            
+            # 发送鼠标离开消息，确保状态正确
+            win32gui.PostMessage(self.hwnd, win32con.WM_MOUSELEAVE, 0, 0)
+            
+            return True
+        except Exception as e:
+            logger.error(f"发送窗口消息失败：{e}")
+            return False
+    
+    def _send_input_click(self, screen_x, screen_y, duration=0.01, right_click=False):
+        """
+        使用 SendInput 实现点击（鼠标瞬移方案）
+        Args:
+            screen_x: 屏幕x坐标
+            screen_y: 屏幕y坐标
+            duration: 点击持续时间
+            right_click: 是否右键点击
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 使用独立鼠标控制器的瞬移点击方法
+            return self.independent_mouse.click_background_fallback(screen_x, screen_y, right_click)
+        except Exception as e:
+            logger.error(f"SendInput 点击失败：{e}")
+            return False
     
     def _send_double_click_message(self, pos):
         """

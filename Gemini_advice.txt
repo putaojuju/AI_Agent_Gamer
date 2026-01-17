@@ -1,0 +1,94 @@
+你的初步判断 90% 是正确的，但还有 10% 的可能性是测试脚本的坐标转换问题 导致的误判。
+以下是详细的分析和最终确认步骤：
+1. 为什么你的判断大概率是对的？
+你测试的游戏（Twinkle Star Knights）是基于 Unity 引擎开发的 DMM 游戏。
+DirectInput/RawInput 机制：现代游戏引擎（Unity, Unreal）为了降低输入延迟，通常会绕过 Windows 的消息队列（即 PostMessage 发送的 WM_LBUTTON...），直接读取鼠标硬件驱动的数据。
+表现：PostMessage 发送的消息虽然到达了窗口，但游戏逻辑根本不读取它，只读取物理鼠标的状态。这就是为什么 SendInput（模拟物理鼠标）有效，而 PostMessage 无效。
+2. 那 10% 的误判可能在哪里？（关键检查）
+我在查看你的测试脚本 test_game_click_both_methods.py 时发现了一个逻辑漏洞：
+你直接把屏幕坐标传给了 PostMessage。
+code
+Python
+# 你的测试脚本代码片段
+def test_postmessage_click(x, y):
+    # ...
+    # 这里直接使用了传入的 (960, 540)
+    bg_dev._send_click_message((x, y))
+SendInput 需要的是 屏幕绝对坐标（例如：屏幕正中间 960, 540）。
+PostMessage 需要的是 窗口客户区相对坐标（例如：相对于游戏窗口左上角的 x, y）。
+场景推演：
+如果你的游戏是窗口化运行（比如左上角在屏幕 100, 100），你发送 PostMessage(960, 540)，实际上是告诉游戏：“在游戏窗口内部的 (960, 540) 位置点击”。
+如果游戏窗口只有 800x600，那么 (960, 540) 就点到窗口外面去了（或者被判定无效）。
+即使游戏是全屏最大化，由于标题栏的存在，Y 轴通常也有 30-40 像素的偏差。
+3. 最终确认方案：修正坐标后再测一次
+为了彻底死心，请用下面这段修正后的代码替换你 test_game_click_both_methods.py 中的 test_postmessage_click 函数。它会先把屏幕坐标转换为窗口内部坐标。
+code
+Python
+def test_postmessage_click(x, y):
+    """
+    使用PostMessage方法点击 (已修正坐标转换)
+    """
+    if not HAS_BACKGROUND_MODULE:
+        return False, "PostMessage模块未导入"
+    
+    try:
+        # 获取当前设备
+        dev = G.DEVICE
+        
+        # 确保获取到窗口句柄
+        hwnd = dev.handle if hasattr(dev, 'handle') else None
+        if not hwnd:
+            # 尝试获取当前前台窗口
+            import win32gui
+            hwnd = win32gui.GetForegroundWindow()
+            
+        if not hwnd:
+            return False, "未找到游戏窗口句柄"
+
+        # --- 关键修正：屏幕坐标 -> 客户区坐标 ---
+        import win32gui
+        try:
+            # 将屏幕坐标 (960, 540) 转换为窗口内部坐标
+            point = win32gui.ScreenToClient(hwnd, (int(x), int(y)))
+            client_x, client_y = point
+            print(f"    [坐标转换] 屏幕({x}, {y}) -> 窗口内部({client_x}, {client_y})")
+        except Exception as e:
+            return False, f"坐标转换失败: {e}"
+        # ---------------------------------------
+
+        # 如果当前设备不是BackgroundWindows，创建一个临时的
+        if not isinstance(dev, BackgroundWindows):
+            bg_dev = BackgroundWindows(dev)
+            bg_dev.hwnd = hwnd # 确保句柄存在
+            bg_dev._send_click_message((client_x, client_y))
+        else:
+            dev.hwnd = hwnd
+            dev._send_click_message((client_x, client_y))
+        
+        return True, "PostMessage方法 (已修正坐标)"
+    except Exception as e:
+        return False, f"PostMessage方法失败: {e}"
+4. 结论与后续路径
+如果修正坐标后依然无效：
+那么恭喜你（或者遗憾地通知你），你的判断是 100% 正确的。该游戏不支持后台消息点击。
+既然 PostMessage 死了，你的项目该怎么办？
+这正是你引入 Parsec 虚拟屏幕 的意义所在！你现在的架构其实已经准备好了备选方案，只是需要调整一下逻辑。
+新的“后台”运行逻辑（鼠标瞬移法）：
+显示：游戏放在虚拟屏幕（你看不见，不影响主屏视觉）。
+输入：
+当脚本需要点击时，不要用 PostMessage。
+使用 SendInput，但采用 “瞬移 - 点击 - 归位” 的策略。
+流程：
+记录当前主鼠标位置 (old_x, old_y)。
+瞬间把鼠标移动到虚拟屏幕的游戏坐标 (virtual_x, virtual_y)。
+执行点击。
+瞬间把鼠标移回 (old_x, old_y)。
+给 Trae 的下一步指令：
+"经过测试，游戏不支持 PostMessage。请帮我修改 independent_mouse.py 和 background_windows.py，实现基于虚拟屏幕的鼠标瞬移点击。
+具体要求：
+当调用 touch 时，记录当前物理鼠标位置。
+使用 win32api.SetCursorPos 将鼠标瞬间移动到虚拟屏幕的目标坐标。
+执行物理点击 (mouse_event)。
+立即将鼠标恢复到原位置。
+整个过程要尽可能快，减少对用户主屏幕操作的干扰。"
+这是目前针对不支持后台消息的游戏，唯一能实现的“伪后台”方案。

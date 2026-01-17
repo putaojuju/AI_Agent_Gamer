@@ -3,7 +3,7 @@ airtest
 psutil
 pywin32
 opencv-python
-pyscreenshot
+mss
 # Virtual Screen Dependencies
 # - Parsec VDD Driver (https://builds.parsec.app/vdd/parsec-vdd-0.41.0.0.exe)
 # - parsec-vdd-cli (https://github.com/HaliComing/parsec-vdd-cli)

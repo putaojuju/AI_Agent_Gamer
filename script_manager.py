@@ -19,6 +19,38 @@ import win32api
 import win32process
 import logging
 import logging.handlers
+import ctypes
+from ctypes import wintypes
+
+# DWM Thumbnail API 定义
+dwmapi = ctypes.WinDLL('dwmapi')
+
+# DWM缩略图结构定义
+class DWM_THUMBNAIL_PROPERTIES(ctypes.Structure):
+    _fields_ = [
+        ('dwFlags', wintypes.DWORD),
+        ('rcDestination', wintypes.RECT),
+        ('rcSource', wintypes.RECT),
+        ('opacity', wintypes.BYTE),
+        ('fVisible', wintypes.BOOL),
+        ('fSourceClientAreaOnly', wintypes.BOOL),
+    ]
+
+# DWM缩略图标志
+dwmapi.DWM_TNP_RECTDESTINATION = 0x00000001
+dwmapi.DWM_TNP_RECTSOURCE = 0x00000002
+dwmapi.DWM_TNP_OPACITY = 0x00000004
+dwmapi.DWM_TNP_VISIBLE = 0x00000008
+dwmapi.DWM_TNP_SOURCECLIENTAREAONLY = 0x00000010
+
+# 窗口矩形结构
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ('left', wintypes.LONG),
+        ('top', wintypes.LONG),
+        ('right', wintypes.LONG),
+        ('bottom', wintypes.LONG),
+    ]
 
 # 配置日志系统
 logging.basicConfig(
@@ -206,8 +238,37 @@ print(results)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 顶部标题
-        title_label = ttk.Label(main_frame, text="游戏脚本管理器", font=("微软雅黑", 16, "bold"))
+        title_label = ttk.Label(main_frame, text="游戏脚本管理器", font=(("微软雅黑", 16, "bold")))
         title_label.pack(pady=10)
+        
+        # 状态指示区域
+        status_frame = ttk.Frame(main_frame, padding="5", relief=tk.SUNKEN, borderwidth=1)
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 脚本运行状态
+        ttk.Label(status_frame, text="脚本状态：", font=(("微软雅黑", 10))).pack(side=tk.LEFT, padx=5)
+        self.script_status_var = tk.StringVar(value="就绪")
+        self.script_status_label = ttk.Label(status_frame, 
+                                            textvariable=self.script_status_var, 
+                                            font=(("微软雅黑", 10, "bold")),
+                                            foreground="green")
+        self.script_status_label.pack(side=tk.LEFT, padx=5)
+        
+        # 当前运行脚本名称
+        ttk.Label(status_frame, text="当前脚本：", font=(("微软雅黑", 10))).pack(side=tk.LEFT, padx=10)
+        self.current_script_var = tk.StringVar(value="无")
+        self.current_script_label = ttk.Label(status_frame, 
+                                            textvariable=self.current_script_var, 
+                                            font=(("微软雅黑", 10)))
+        self.current_script_label.pack(side=tk.LEFT, padx=5)
+        
+        # 运行模式指示
+        ttk.Label(status_frame, text="运行模式：", font=(("微软雅黑", 10))).pack(side=tk.LEFT, padx=10)
+        self.run_mode_var = tk.StringVar(value="正常")
+        self.run_mode_label = ttk.Label(status_frame, 
+                                      textvariable=self.run_mode_var, 
+                                      font=(("微软雅黑", 10)))
+        self.run_mode_label.pack(side=tk.LEFT, padx=5)
         
         # 日志显示状态
         self.log_visible = tk.BooleanVar(value=True)
@@ -288,20 +349,33 @@ print(results)
         ttk.Button(button_frame, text="刷新列表", command=self.refresh_scripts, style="ScriptButton.TButton").pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
         ttk.Button(button_frame, text="添加脚本", command=self.add_script, style="ScriptButton.TButton").pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
         
-        # 运行模式选择
-        mode_frame = ttk.LabelFrame(scrollable_inner_frame, text="运行模式", padding="5")
+        # 运行模式选择 - 三种模式切换
+        mode_frame = ttk.LabelFrame(scrollable_inner_frame, text="运行模式", padding="10")
         mode_frame.pack(fill=tk.X, pady=(0, 10), expand=False)
         
         self.run_mode = tk.StringVar(value="normal")
-        ttk.Radiobutton(mode_frame, text="正常模式", variable=self.run_mode, value="normal").pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(mode_frame, text="后台模式", variable=self.run_mode, value="background").pack(side=tk.LEFT, padx=10)
+        
+        # 三种运行模式选项
+        mode_options = {
+            "主屏幕模式": "normal",      # 正常玩游戏，脚本暂停
+            "小窗口监控模式": "monitor",  # 一边干活一边看挂机
+            "纯后台自动化": "background"  # 完全隐藏，全速运行
+        }
+        
+        # 创建模式选择按钮组
+        mode_button_frame = ttk.Frame(mode_frame)
+        mode_button_frame.pack(fill=tk.X, expand=False, pady=5)
+        
+        for text, value in mode_options.items():
+            ttk.Radiobutton(
+                mode_button_frame, 
+                text=text, 
+                variable=self.run_mode, 
+                value=value,
+                command=self.on_mode_change
+            ).pack(side=tk.LEFT, padx=10)
         
         # 后台运行方式选择
-        bg_mode_frame = ttk.Frame(mode_frame)
-        bg_mode_frame.pack(fill=tk.X, pady=(5, 0), expand=False)
-        
-        ttk.Label(bg_mode_frame, text="后台运行方式:", width=12).pack(side=tk.LEFT, padx=10)
-        
         self.bg_run_mode = tk.StringVar(value="message")
         bg_mode_options = {
             "消息模式": "message",      # 基于窗口消息，不影响前台
@@ -309,6 +383,10 @@ print(results)
             "最小化模式": "minimize",    # 窗口最小化
             "隐藏模式": "hide"          # 窗口完全隐藏
         }
+        
+        bg_mode_frame = ttk.Frame(mode_frame)
+        bg_mode_frame.pack(fill=tk.X, pady=(5, 0), expand=False)
+        ttk.Label(bg_mode_frame, text="后台运行方式:", width=12).pack(side=tk.LEFT, padx=10, anchor=tk.NW)
         
         bg_mode_combo = ttk.Combobox(bg_mode_frame, textvariable=self.bg_run_mode, values=list(bg_mode_options.keys()))
         bg_mode_combo.pack(side=tk.LEFT, padx=5)
@@ -408,6 +486,10 @@ print(results)
         self.original_pos = None  # 原始窗口位置
         self.original_size = None  # 原始窗口大小
         self.original_style = None  # 原始窗口样式
+        
+        # DWM缩略图属性
+        self.dwm_thumbnail = None  # DWM缩略图句柄
+        self.using_dwm = False  # 是否使用DWM缩略图
         
         # 将左右框架添加到paned window
         self.paned_window.add(left_frame, weight=2)  # 左侧功能区域占2份
@@ -521,6 +603,23 @@ print(results)
             print(f"[DEBUG] 未找到测试脚本: {test_script_path}")
             self.log(f"未找到测试脚本: {test_script_path}")
         
+        # 搜索test_files目录下的测试脚本
+        test_files_dir = os.path.join(project_root, "test_files")
+        if os.path.exists(test_files_dir):
+            print(f"[DEBUG] 检查test_files目录: {test_files_dir}")
+            self.log(f"检查test_files目录: {test_files_dir}")
+            
+            # 搜索test_button_click.py
+            test_button_script = os.path.join(test_files_dir, "test_button_click.py")
+            if os.path.exists(test_button_script):
+                print(f"[DEBUG] 找到按钮点击测试脚本: {test_button_script}")
+                self.log(f"找到按钮点击测试脚本: {test_button_script}")
+                self.scripts.append({
+                    "name": "按钮点击测试脚本",
+                    "path": test_button_script,
+                    "status": "就绪"
+                })
+        
         print(f"[DEBUG] 总共加载脚本数量: {len(self.scripts)}")
         self.log(f"总共加载脚本数量: {len(self.scripts)}")
         
@@ -562,6 +661,81 @@ print(results)
             self.game_path_entry.delete(0, tk.END)
             self.game_path_entry.insert(0, game_path)
     
+    def create_dwm_thumbnail(self, source_hwnd, dest_hwnd):
+        """
+        创建DWM缩略图
+        Args:
+            source_hwnd: 源窗口句柄（游戏窗口）
+            dest_hwnd: 目标窗口句柄（嵌入容器）
+        Returns:
+            bool: 是否创建成功
+        """
+        try:
+            # 创建缩略图句柄
+            thumbnail = ctypes.c_void_p()
+            result = dwmapi.DwmRegisterThumbnail(dest_hwnd, source_hwnd, ctypes.byref(thumbnail))
+            if result != 0:
+                self.log(f"DwmRegisterThumbnail 失败，错误码: {result}", "error")
+                return False
+            
+            self.dwm_thumbnail = thumbnail
+            self.using_dwm = True
+            self.log(f"DWM缩略图已创建，句柄: {thumbnail.value}", "info")
+            return True
+        except Exception as e:
+            self.log(f"创建DWM缩略图失败: {str(e)}", "error")
+            return False
+    
+    def update_dwm_thumbnail(self):
+        """
+        更新DWM缩略图属性
+        """
+        if not self.dwm_thumbnail or not self.embedded_hwnd:
+            return False
+        
+        try:
+            # 获取嵌入容器的大小
+            self.embed_frame.update_idletasks()
+            width = self.embed_frame.winfo_width()
+            height = self.embed_frame.winfo_height()
+            
+            # 设置缩略图属性
+            props = DWM_THUMBNAIL_PROPERTIES()
+            props.dwFlags = dwmapi.DWM_TNP_RECTDESTINATION | dwmapi.DWM_TNP_VISIBLE | dwmapi.DWM_TNP_OPACITY
+            props.rcDestination = RECT(0, 0, width, height)
+            props.opacity = 255  # 完全不透明
+            props.fVisible = True
+            
+            # 更新缩略图
+            result = dwmapi.DwmUpdateThumbnailProperties(self.dwm_thumbnail, ctypes.byref(props))
+            if result != 0:
+                self.log(f"DwmUpdateThumbnailProperties 失败，错误码: {result}", "error")
+                return False
+            
+            return True
+        except Exception as e:
+            self.log(f"更新DWM缩略图失败: {str(e)}", "error")
+            return False
+    
+    def destroy_dwm_thumbnail(self):
+        """
+        销毁DWM缩略图
+        """
+        if not self.dwm_thumbnail:
+            return
+        
+        try:
+            result = dwmapi.DwmUnregisterThumbnail(self.dwm_thumbnail)
+            if result != 0:
+                self.log(f"DwmUnregisterThumbnail 失败，错误码: {result}", "error")
+            else:
+                self.log("DWM缩略图已销毁", "info")
+        except Exception as e:
+            self.log(f"销毁DWM缩略图失败: {str(e)}", "error")
+        finally:
+            self.dwm_thumbnail = None
+            self.using_dwm = False
+    
     def select_game_window(self):
         """启动游戏窗口选择模式"""
         self.log("启动游戏窗口选择模式")
@@ -589,7 +763,7 @@ print(results)
         self.root.bind("<Alt_R>", self.on_alt_press)
     
     def embed_game_window(self):
-        """将游戏窗口嵌入到脚本管理器"""
+        """将游戏窗口嵌入到脚本管理器，优先使用DWM Thumbnail"""
         self.log("尝试嵌入游戏窗口", "debug")
         
         # 获取游戏标题
@@ -611,57 +785,76 @@ print(results)
         
         # 保存原始窗口信息
         self.log(f"保存原始窗口信息：句柄={hwnd}", "debug")
-        self.original_parent = win32gui.GetParent(hwnd)
         self.original_pos = win32gui.GetWindowRect(hwnd)
         self.original_size = (self.original_pos[2] - self.original_pos[0], 
                              self.original_pos[3] - self.original_pos[1])
-        self.original_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
         
-        self.log(f"原始窗口信息：父窗口={self.original_parent}, 位置={self.original_pos}, 大小={self.original_size}, 样式={hex(self.original_style)}", "debug")
-        
-        # 获取嵌入容器的句柄
-        embed_hwnd = self.embed_frame.winfo_id()
-        self.log(f"嵌入容器句柄：{embed_hwnd}", "debug")
+        self.log(f"原始窗口信息：位置={self.original_pos}, 大小={self.original_size}", "debug")
         
         try:
-            # 设置游戏窗口为嵌入容器的子窗口
-            self.log(f"设置游戏窗口父窗口为嵌入容器：{hwnd} -> {embed_hwnd}", "debug")
-            win32gui.SetParent(hwnd, embed_hwnd)
+            # 获取嵌入容器的句柄
+            embed_hwnd = self.embed_frame.winfo_id()
+            self.log(f"嵌入容器句柄：{embed_hwnd}", "debug")
             
-            # 调整窗口样式，保留必要的样式以确保能接收鼠标消息
-            # 获取当前窗口样式
-            current_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-            # 保留一些必要的样式，添加子窗口样式
-            new_style = (current_style & ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME | win32con.WS_SYSMENU)) | \
-                        win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.WS_CLIPSIBLINGS | win32con.WS_CLIPCHILDREN
-            self.log(f"修改窗口样式：{hex(current_style)} -> {hex(new_style)}", "debug")
-            win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, new_style)
-            
-            # 调整窗口大小以适应嵌入容器
-            self.embed_frame.update_idletasks()
-            width = self.embed_frame.winfo_width()
-            height = self.embed_frame.winfo_height()
-            self.log(f"调整嵌入窗口大小：{width}x{height}", "debug")
-            win32gui.MoveWindow(hwnd, 0, 0, width, height, True)
-            
-            # 保存嵌入的窗口句柄
-            self.embedded_hwnd = hwnd
-            
-            # 添加大小调整绑定
-            self.embed_frame.bind("<Configure>", self.on_embed_frame_resize)
-            
-            self.log(f"游戏窗口已成功嵌入：{game_title}", "info")
-            self.status_var.set(f"游戏窗口已嵌入：{game_title}")
-            
-            # 切换到游戏嵌入标签页
-            self.right_notebook.select(1)  # 1是游戏嵌入标签页的索引
+            # 尝试使用DWM Thumbnail
+            if self.create_dwm_thumbnail(hwnd, embed_hwnd):
+                # 更新DWM缩略图属性
+                self.update_dwm_thumbnail()
+                
+                # 保存嵌入的窗口句柄
+                self.embedded_hwnd = hwnd
+                
+                # 添加大小调整绑定
+                self.embed_frame.bind("<Configure>", self.on_embed_frame_resize)
+                
+                self.log(f"游戏窗口已通过DWM Thumbnail成功嵌入：{game_title}", "info")
+                self.status_var.set(f"游戏窗口已嵌入：{game_title}")
+                
+                # 切换到游戏嵌入标签页
+                self.right_notebook.select(1)  # 1是游戏嵌入标签页的索引
+            else:
+                # DWM Thumbnail失败，回退到SetParent方式
+                self.log("DWM Thumbnail失败，回退到SetParent方式", "warning")
+                
+                # 保存更多原始窗口信息
+                self.original_parent = win32gui.GetParent(hwnd)
+                self.original_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                
+                # 设置游戏窗口为嵌入容器的子窗口
+                win32gui.SetParent(hwnd, embed_hwnd)
+                
+                # 调整窗口样式
+                current_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                new_style = (current_style & ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME | win32con.WS_SYSMENU)) | \
+                            win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.WS_CLIPSIBLINGS | win32con.WS_CLIPCHILDREN
+                win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, new_style)
+                
+                # 调整窗口大小
+                self.embed_frame.update_idletasks()
+                width = self.embed_frame.winfo_width()
+                height = self.embed_frame.winfo_height()
+                win32gui.MoveWindow(hwnd, 0, 0, width, height, True)
+                
+                # 保存嵌入的窗口句柄
+                self.embedded_hwnd = hwnd
+                
+                # 添加大小调整绑定
+                self.embed_frame.bind("<Configure>", self.on_embed_frame_resize)
+                
+                self.log(f"游戏窗口已通过SetParent成功嵌入：{game_title}", "info")
+                self.status_var.set(f"游戏窗口已嵌入：{game_title}")
+                
+                # 切换到游戏嵌入标签页
+                self.right_notebook.select(1)
             
         except Exception as e:
             self.log(f"嵌入游戏窗口失败：{str(e)}", "error")
             messagebox.showerror("错误", f"嵌入游戏窗口失败：{str(e)}")
     
     def unembed_game_window(self):
-        """取消嵌入游戏窗口，恢复原状态"""
+        """
+        取消嵌入游戏窗口，恢复原状态
+        """
         if not self.embedded_hwnd:
             messagebox.showinfo("提示", "没有已嵌入的游戏窗口")
             return
@@ -669,26 +862,27 @@ print(results)
         try:
             self.log(f"开始取消嵌入游戏窗口，句柄：{self.embedded_hwnd}", "debug")
             
-            # 恢复原始父窗口
-            if self.original_parent:
-                self.log(f"恢复原始父窗口：{self.original_parent}", "debug")
-                win32gui.SetParent(self.embedded_hwnd, self.original_parent)
+            if self.using_dwm:
+                # 销毁DWM缩略图
+                self.destroy_dwm_thumbnail()
             else:
-                self.log("恢复父窗口为None", "debug")
-                win32gui.SetParent(self.embedded_hwnd, None)
-            
-            # 恢复原始窗口样式
-            self.log(f"恢复原始窗口样式：{hex(self.original_style)}", "debug")
-            win32gui.SetWindowLong(self.embedded_hwnd, win32con.GWL_STYLE, self.original_style)
+                # 恢复原始父窗口
+                if hasattr(self, 'original_parent') and self.original_parent:
+                    win32gui.SetParent(self.embedded_hwnd, self.original_parent)
+                else:
+                    win32gui.SetParent(self.embedded_hwnd, None)
+                
+                # 恢复原始窗口样式
+                if hasattr(self, 'original_style') and self.original_style:
+                    win32gui.SetWindowLong(self.embedded_hwnd, win32con.GWL_STYLE, self.original_style)
             
             # 恢复原始窗口位置和大小
-            self.log(f"恢复原始窗口位置和大小：{self.original_pos} -> {self.original_size}", "debug")
-            win32gui.MoveWindow(self.embedded_hwnd, 
-                              self.original_pos[0], self.original_pos[1], 
-                              self.original_size[0], self.original_size[1], True)
+            if self.original_pos and self.original_size:
+                win32gui.MoveWindow(self.embedded_hwnd, 
+                                  self.original_pos[0], self.original_pos[1], 
+                                  self.original_size[0], self.original_size[1], True)
             
             # 显示窗口
-            self.log("显示并激活窗口", "debug")
             win32gui.ShowWindow(self.embedded_hwnd, win32con.SW_SHOW)
             win32gui.SetForegroundWindow(self.embedded_hwnd)
             
@@ -710,21 +904,136 @@ print(results)
             messagebox.showerror("错误", f"取消嵌入游戏窗口失败：{str(e)}")
     
     def on_embed_frame_resize(self, event):
-        """嵌入容器大小改变时，调整游戏窗口大小"""
+        """
+        嵌入容器大小改变时，调整游戏窗口大小或更新DWM缩略图
+        """
         if not self.embedded_hwnd:
             return
         
         try:
-            # 获取新的容器大小
-            width = event.width
-            height = event.height
-            
-            # 调整游戏窗口大小
-            self.log(f"调整嵌入窗口大小：{width}x{height}", "debug")
-            win32gui.MoveWindow(self.embedded_hwnd, 0, 0, width, height, True)
+            if self.using_dwm:
+                # 更新DWM缩略图大小
+                self.update_dwm_thumbnail()
+            else:
+                # 调整游戏窗口大小
+                width = event.width
+                height = event.height
+                win32gui.MoveWindow(self.embedded_hwnd, 0, 0, width, height, True)
             
         except Exception as e:
             self.log(f"调整嵌入窗口大小失败：{str(e)}", "error")
+    
+    def on_mode_change(self):
+        """
+        运行模式切换处理
+        """
+        mode = self.run_mode.get()
+        self.log(f"运行模式已切换为: {mode}", "info")
+        
+        # 获取当前嵌入的游戏窗口句柄
+        game_title = self.game_title_entry.get().strip()
+        if not game_title:
+            self.log("未选择游戏窗口，模式切换将在选择游戏窗口后生效", "info")
+            return
+        
+        # 查找游戏窗口
+        hwnd = win32gui.FindWindow(None, game_title)
+        if hwnd == 0:
+            self.log(f"未找到游戏窗口：{game_title}", "error")
+            return
+        
+        # 根据模式执行相应操作
+        if mode == "normal":
+            # 主屏幕模式：正常玩游戏，脚本暂停
+            self.switch_to_main_screen_mode(hwnd)
+        elif mode == "monitor":
+            # 小窗口监控模式：一边干活一边看挂机
+            self.switch_to_monitor_mode(hwnd)
+        elif mode == "background":
+            # 纯后台自动化：完全隐藏，全速运行
+            self.switch_to_background_mode(hwnd)
+    
+    def switch_to_main_screen_mode(self, hwnd):
+        """
+        切换到主屏幕模式
+        """
+        self.log("切换到主屏幕模式", "info")
+        
+        # 1. 移动游戏窗口到主屏幕
+        win32gui.MoveWindow(hwnd, 0, 0, 1920, 1080, True)
+        
+        # 2. 激活游戏窗口
+        win32gui.ShowWindow(hwnd, win32con.SW_SHOWMAXIMIZED)
+        win32gui.SetForegroundWindow(hwnd)
+        
+        # 3. 如果有DWM缩略图，暂时隐藏
+        if hasattr(self, 'using_dwm') and self.using_dwm and self.dwm_thumbnail:
+            # 可以选择销毁或隐藏，这里选择销毁
+            self.destroy_dwm_thumbnail()
+        
+        # 4. 暂停脚本监控
+        self.log("脚本监控已暂停，避免干扰人工操作", "info")
+        
+        # 5. 更新状态
+        self.status_var.set("主屏幕模式：游戏已移至主屏幕，脚本暂停")
+    
+    def switch_to_monitor_mode(self, hwnd):
+        """
+        切换到小窗口监控模式
+        """
+        self.log("切换到小窗口监控模式", "info")
+        
+        # 1. 移动游戏窗口到虚拟屏幕
+        # 假设虚拟屏幕位于主屏幕右侧
+        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        win32gui.MoveWindow(hwnd, screen_width, 0, 1920, 1080, True)
+        
+        # 2. 确保游戏窗口可见
+        win32gui.ShowWindow(hwnd, win32con.SW_SHOWMAXIMIZED)
+        
+        # 3. 创建或更新DWM缩略图
+        if not hasattr(self, 'using_dwm') or not self.using_dwm:
+            # 获取嵌入容器句柄
+            embed_hwnd = self.embed_frame.winfo_id()
+            self.create_dwm_thumbnail(hwnd, embed_hwnd)
+        
+        self.update_dwm_thumbnail()
+        
+        # 4. 切换到游戏嵌入标签页
+        self.right_notebook.select(1)  # 1是游戏嵌入标签页的索引
+        
+        # 5. 更新状态
+        self.status_var.set("小窗口监控模式：游戏已移至虚拟屏幕，可在小窗口查看")
+    
+    def switch_to_background_mode(self, hwnd):
+        """
+        切换到纯后台自动化模式
+        """
+        self.log("切换到纯后台自动化模式", "info")
+        
+        # 1. 移动游戏窗口到虚拟屏幕
+        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        win32gui.MoveWindow(hwnd, screen_width, 0, 1920, 1080, True)
+        
+        # 2. 根据选择的后台运行方式处理窗口
+        bg_mode = self.bg_run_mode.get()
+        if bg_mode == "transparent":
+            # 透明模式：移动到虚拟屏幕，保持不透明以确保正常渲染
+            screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+            win32gui.MoveWindow(hwnd, screen_width, 0, 1920, 1080, True)
+        elif bg_mode == "minimize":
+            # 最小化模式：最小化窗口
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+        elif bg_mode == "hide":
+            # 隐藏模式：完全隐藏窗口
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+        
+        # 3. 销毁DWM缩略图以节省GPU资源
+        if hasattr(self, 'using_dwm') and self.using_dwm and self.dwm_thumbnail:
+            self.destroy_dwm_thumbnail()
+        
+        # 4. 更新状态
+        self.status_var.set("纯后台自动化：游戏已移至虚拟屏幕，全速运行")
     
     def track_mouse(self):
         """跟踪鼠标位置，显示当前指向的窗口"""
@@ -815,11 +1124,15 @@ print(results)
             return None
     
     def run_script(self):
-        """运行选中的脚本，支持后台模式"""
+        """
+        运行选中的脚本，支持后台模式
+        """
         # 获取选中的脚本
         selected_item = self.script_tree.selection()
         if not selected_item:
-            messagebox.showwarning("警告", "请先选择一个脚本")
+            self.log("请先选择一个脚本", "warning")
+            self.script_status_var.set("警告")
+            self.script_status_label.config(foreground="orange")
             return
         
         # 获取脚本信息
@@ -832,11 +1145,14 @@ print(results)
         for script in self.scripts:
             if script["path"] == script_path:
                 if script["status"] == "运行中":
-                    messagebox.showinfo("提示", "脚本已经在运行中")
+                    self.log("脚本已经在运行中", "info")
+                    self.script_status_var.set("运行中")
+                    self.script_status_label.config(foreground="blue")
                     return
                 
                 # 获取运行模式
                 mode = self.run_mode.get()
+                bg_run_mode = self.bg_run_mode.get()
                 self.log(f"运行模式：{mode}")
                 
                 game_process = None
@@ -860,23 +1176,16 @@ print(results)
                     if game_hwnd > 0:
                         # 找到已打开的窗口，直接连接
                         self.log(f"找到已打开的游戏窗口，句柄：{game_hwnd}")
-                        # 如果不是嵌入窗口，才设置为后台模式
+                        # 将窗口移动到虚拟屏幕，保持窗口不透明以确保正常渲染
                         try:
-                            # 设置窗口为分层透明
-                            current_style = win32gui.GetWindowLong(game_hwnd, win32con.GWL_EXSTYLE)
-                            win32gui.SetWindowLong(game_hwnd, win32con.GWL_EXSTYLE, 
-                                                 current_style | win32con.WS_EX_LAYERED)
-                            
-                            # 设置窗口透明度为0（完全透明）
-                            win32gui.SetLayeredWindowAttributes(game_hwnd, 0, 0, win32con.LWA_ALPHA)
-                            self.log("游戏窗口已设置为完全透明")
-                            
-                            # 将窗口移动到屏幕外
+                            # 获取主显示器尺寸
                             screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
                             screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-                            win32gui.MoveWindow(game_hwnd, screen_width + 100, screen_height + 100, 
-                                               800, 600, True)
-                            self.log("游戏窗口已移动到屏幕外")
+                            
+                            # 将窗口移动到虚拟屏幕（假设虚拟屏幕位于主屏幕右侧）
+                            # 保持窗口不透明，确保游戏引擎正常渲染
+                            win32gui.MoveWindow(game_hwnd, screen_width, 0, 1920, 1080, True)
+                            self.log("游戏窗口已移动到虚拟屏幕，保持不透明以确保正常渲染")
                         except Exception as e:
                             self.log(f"设置窗口后台模式失败：{str(e)}")
                             # 失败时降级为最小化窗口
@@ -885,15 +1194,21 @@ print(results)
                     else:
                         # 未找到已打开的窗口，启动新的游戏进程
                         if not game_path:
-                            messagebox.showwarning("警告", "请输入游戏路径")
+                            self.log("请输入游戏路径", "warning")
+                            self.script_status_var.set("警告")
+                            self.script_status_label.config(foreground="orange")
                             return
                         
                         if not os.path.exists(game_path):
-                            messagebox.showwarning("警告", f"游戏路径不存在：{game_path}")
+                            self.log(f"游戏路径不存在：{game_path}", "warning")
+                            self.script_status_var.set("警告")
+                            self.script_status_label.config(foreground="orange")
                             return
                         
                         if not game_title:
-                            messagebox.showwarning("警告", "请输入游戏标题")
+                            self.log("请输入游戏标题", "warning")
+                            self.script_status_var.set("警告")
+                            self.script_status_label.config(foreground="orange")
                             return
                         
                         self.log(f"未找到已打开的窗口，启动新的游戏进程：{game_path}")
@@ -902,6 +1217,12 @@ print(results)
                 # 更新脚本状态
                 script["status"] = "运行中"
                 self.update_script_tree()
+                
+                # 更新状态指示
+                self.script_status_var.set("运行中")
+                self.script_status_label.config(foreground="blue")
+                self.current_script_var.set(script_name)
+                self.run_mode_var.set("后台" if mode == "background" else "正常")
                 
                 # 创建线程运行脚本
                 thread = threading.Thread(
@@ -936,30 +1257,17 @@ print(results)
         self.log(f"找到游戏窗口，句柄：{hwnd}")
         
         if mode == "background":
-            # 后台模式：使用窗口透明度设置为0，而不是隐藏窗口
-            # 这样Airtest可以正常截图，同时窗口对用户不可见
+            # 后台模式：将窗口移动到虚拟屏幕，保持窗口不透明以确保正常渲染
             try:
-                # 获取窗口当前风格
-                current_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-                
-                # 设置窗口为分层透明
-                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
-                                     current_style | win32con.WS_EX_LAYERED)
-                
-                # 设置窗口透明度为0（完全透明）
-                win32gui.SetLayeredWindowAttributes(hwnd, 0, 0, win32con.LWA_ALPHA)
-                self.log("游戏窗口已设置为完全透明")
-                
-                # 将窗口移动到屏幕外，确保不占用可见空间
                 # 获取主显示器尺寸
                 import win32api
                 screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
                 screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
                 
-                # 将窗口移动到屏幕右下方外部
-                win32gui.MoveWindow(hwnd, screen_width + 100, screen_height + 100, 
-                                   800, 600, True)
-                self.log("游戏窗口已移动到屏幕外")
+                # 将窗口移动到虚拟屏幕（假设虚拟屏幕位于主屏幕右侧）
+                # 保持窗口不透明，确保游戏引擎正常渲染
+                win32gui.MoveWindow(hwnd, screen_width, 0, 1920, 1080, True)
+                self.log("游戏窗口已移动到虚拟屏幕，保持不透明以确保正常渲染")
             except Exception as e:
                 self.log(f"设置窗口后台模式失败：{str(e)}")
                 # 失败时降级为最小化窗口
@@ -1066,15 +1374,22 @@ print(results)
             
             if process.returncode == 0:
                 self.log(f"脚本执行成功：{script['name']}")
+                self.root.after(0, lambda: self.script_status_var.set("就绪"))
+                self.root.after(0, lambda: self.script_status_label.config(foreground="green"))
+                self.root.after(0, lambda: self.current_script_var.set("无"))
             else:
                 self.log(f"脚本执行失败，返回码：{process.returncode}")
-                messagebox.showerror("错误", f"脚本执行失败：{script['name']}")
+                self.root.after(0, lambda: self.script_status_var.set("失败"))
+                self.root.after(0, lambda: self.script_status_label.config(foreground="red"))
+                self.root.after(0, lambda: self.current_script_var.set("无"))
                 
         except Exception as e:
             script["status"] = "就绪"
             self.running_scripts.pop(script['path'], None)
             self.log(f"脚本执行错误：{str(e)}")
-            messagebox.showerror("错误", f"脚本执行错误：{str(e)}")
+            self.root.after(0, lambda: self.script_status_var.set("错误"))
+            self.root.after(0, lambda: self.script_status_label.config(foreground="red"))
+            self.root.after(0, lambda: self.current_script_var.set("无"))
         
         finally:
             # 清理游戏进程（仅当是我们启动的进程时才终止）
@@ -1107,6 +1422,7 @@ print(results)
             
             self.root.after(0, self.update_script_tree)
             self.root.after(0, lambda: self.status_var.set("就绪"))
+            self.root.after(0, lambda: self.run_mode_var.set("正常"))
     
     def get_process_info(self, process):
         """获取进程信息"""
@@ -1139,8 +1455,11 @@ print(results)
         error_msg = f"{process_type} 进程出现故障，返回码：{return_code}"
         self.log(f"错误：{error_msg}")
         
-        # 发送通知
-        messagebox.showerror("进程异常", error_msg)
+        # 更新状态指示
+        self.root.after(0, lambda: self.script_status_var.set("异常"))
+        self.root.after(0, lambda: self.script_status_label.config(foreground="red"))
+        self.root.after(0, lambda: self.current_script_var.set("无"))
+        self.root.after(0, lambda: self.run_mode_var.set("正常"))
     
     def monitor_processes(self, script_process, game_process, script):
         """监控脚本和游戏进程状态"""
@@ -1185,7 +1504,9 @@ print(results)
         # 获取选中的脚本
         selected_item = self.script_tree.selection()
         if not selected_item:
-            messagebox.showwarning("警告", "请先选择一个脚本")
+            self.log("请先选择一个脚本", "warning")
+            self.script_status_var.set("警告")
+            self.script_status_label.config(foreground="orange")
             return
         
         # 获取脚本信息
@@ -1196,7 +1517,9 @@ print(results)
         
         # 检查脚本是否在运行
         if script_path not in self.running_scripts:
-            messagebox.showinfo("提示", "脚本未在运行")
+            self.log("脚本未在运行", "info")
+            self.script_status_var.set("未运行")
+            self.script_status_label.config(foreground="gray")
             return
         
         # 停止脚本
@@ -1221,6 +1544,10 @@ print(results)
         # 更新UI
         self.update_script_tree()
         self.status_var.set("就绪")
+        self.script_status_var.set("就绪")
+        self.script_status_label.config(foreground="green")
+        self.current_script_var.set("无")
+        self.run_mode_var.set("正常")
         self.log(f"脚本已停止：{script_name}")
     
     def refresh_scripts(self):

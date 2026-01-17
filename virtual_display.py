@@ -7,6 +7,7 @@
 import win32gui
 import win32con
 import win32api
+import pywintypes
 import logging
 import time
 
@@ -44,42 +45,48 @@ class VirtualDisplayManager:
         self.virtual_display = None
         self.main_display = None
         
-        for i in range(10):  # 最多检查10个显示器
+        logger.info("开始检测显示器")
+        
+        # 由于win32gui.EnumDisplayDevices在某些Python环境中不存在，直接使用方法2
+        method1_success = False
+        logger.info("直接使用方法2获取主显示器信息")
+        
+        # 如果方法1失败，尝试使用GetSystemMetrics获取主显示器信息
+        if not method1_success or len(self.displays) == 0:
+            logger.info("方法1检测失败，尝试使用方法2获取主显示器信息")
             try:
-                device = win32gui.EnumDisplayDevices(None, i)
-                if device.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP:
-                    # 获取显示器设置
-                    try:
-                        settings = win32gui.EnumDisplaySettings(device.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
-                        display_info = {
-                            'id': i,
-                            'name': device.DeviceName,
-                            'device_string': device.DeviceString,
-                            'is_primary': bool(device.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE),
-                            'left': settings.Position.x,
-                            'top': settings.Position.y,
-                            'width': settings.PelsWidth,
-                            'height': settings.PelsHeight,
-                            'refresh_rate': settings.DisplayFrequency,
-                            'bit_depth': settings.BitsPerPel
-                        }
-                        self.displays.append(display_info)
-                        
-                        # 记录主屏幕
-                        if display_info['is_primary']:
-                            self.main_display = display_info
-                        # 记录虚拟屏幕（非主屏幕）
-                        elif not self.virtual_display:
-                            self.virtual_display = display_info
-                    except Exception as e:
-                        logger.error(f"获取显示器 {device.DeviceName} 设置失败: {e}")
+                # 获取屏幕尺寸
+                width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+                height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+                
+                # 创建主显示器信息
+                main_display_info = {
+                    'id': 0,
+                    'name': r'\.\DISPLAY1',
+                    'device_string': '主显示器',
+                    'is_primary': True,
+                    'left': 0,
+                    'top': 0,
+                    'width': width,
+                    'height': height,
+                    'refresh_rate': 60,  # 假设默认刷新率
+                    'bit_depth': 32,       # 假设默认位深度
+                    'is_attached': True
+                }
+                
+                self.displays.append(main_display_info)
+                self.main_display = main_display_info
+                
+                logger.info(f"使用方法2获取主显示器信息成功: {width}x{height}")
             except Exception as e:
-                # 超过显示器数量，退出循环
-                break
+                logger.error(f"使用方法2获取主显示器信息失败: {e}")
         
         logger.info(f"检测到 {len(self.displays)} 个显示器")
         for display in self.displays:
-            logger.debug(f"显示器 {display['id']}: {display['name']}, 位置: ({display['left']}, {display['top']}), 大小: {display['width']}x{display['height']}, 主屏幕: {display['is_primary']}")
+            logger.debug(f"显示器 {display['id']}: {display['name']}, 位置: ({display['left']}, {display['top']}), 大小: {display['width']}x{display['height']}, 主屏幕: {display['is_primary']}, 已连接: {display.get('is_attached', True)}")
+        
+        # 不再创建默认虚拟屏幕，只使用真实检测到的显示器
+        # 如果需要虚拟屏幕，请先安装Parsec VDD Driver并使用parsec-vdd-cli创建
     
     def get_displays(self):
         """
@@ -127,6 +134,12 @@ class VirtualDisplayManager:
             dict: 窗口所在的显示器信息
         """
         try:
+            # 首先检查窗口句柄是否有效
+            if not win32gui.IsWindow(hwnd):
+                logger.error(f"无效的窗口句柄: {hwnd}")
+                return self.main_display
+            
+            # 获取窗口矩形
             rect = win32gui.GetWindowRect(hwnd)
             # 计算窗口中心点
             center_x = (rect[0] + rect[2]) // 2
@@ -138,6 +151,9 @@ class VirtualDisplayManager:
                     return display
             
             # 如果没有找到，返回主屏幕
+            return self.main_display
+        except pywintypes.error as e:
+            logger.error(f"获取窗口 {hwnd} 所在显示器失败: {e}")
             return self.main_display
         except Exception as e:
             logger.error(f"获取窗口 {hwnd} 所在显示器失败: {e}")

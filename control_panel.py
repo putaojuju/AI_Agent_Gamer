@@ -9,6 +9,12 @@ from tkinter import ttk, scrolledtext, messagebox
 import threading
 import time
 import logging
+from mss import mss
+from PIL import Image, ImageTk
+import numpy as np
+import cv2
+import win32gui
+import win32con
 from virtual_display import virtual_display_manager
 from independent_mouse import independent_mouse
 from game_window_manager import game_window_manager
@@ -86,6 +92,10 @@ class ControlPanel:
         window_frame = ttk.Frame(notebook, padding="10")
         notebook.add(window_frame, text="游戏窗口管理")
         
+        # 虚拟屏幕预览标签页
+        virtual_preview_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(virtual_preview_frame, text="虚拟屏幕预览")
+        
         # 日志标签页
         log_frame = ttk.Frame(notebook, padding="10")
         notebook.add(log_frame, text="日志")
@@ -98,6 +108,9 @@ class ControlPanel:
         
         # 创建游戏窗口管理页面
         self.create_window_page(window_frame)
+        
+        # 创建虚拟屏幕预览页面
+        self.create_virtual_preview_page(virtual_preview_frame)
         
         # 创建日志页面
         self.create_log_page(log_frame)
@@ -231,6 +244,185 @@ class ControlPanel:
         # 设置网格权重
         window_grid.columnconfigure(0, weight=1)
         window_grid.rowconfigure(1, weight=1)
+    
+    def create_virtual_preview_page(self, parent):
+        """
+        创建虚拟屏幕预览页面
+        """
+        # 创建预览框架
+        preview_grid = ttk.Frame(parent)
+        preview_grid.pack(fill=tk.BOTH, expand=True)
+        
+        # 预览标题
+        ttk.Label(preview_grid, text="虚拟屏幕实时预览", font=(("Arial", 14, "bold"))).pack(pady=10)
+        
+        # 预览画布框架
+        canvas_frame = ttk.Frame(preview_grid, relief=tk.SUNKEN, borderwidth=1)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # 创建画布
+        self.preview_canvas = tk.Canvas(canvas_frame, bg="#000000")
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # 预览控制框架
+        control_frame = ttk.Frame(preview_grid)
+        control_frame.pack(fill=tk.X, pady=5)
+        
+        # 预览状态
+        self.preview_status_var = tk.StringVar(value="未开始预览")
+        ttk.Label(control_frame, textvariable=self.preview_status_var).pack(side=tk.LEFT, padx=5)
+        
+        # 刷新频率选择
+        ttk.Label(control_frame, text="刷新频率:").pack(side=tk.LEFT, padx=5)
+        self.refresh_rate_var = tk.StringVar(value="1")
+        refresh_rate_combo = ttk.Combobox(
+            control_frame,
+            textvariable=self.refresh_rate_var,
+            values=["0.5", "1", "2", "5"],
+            state="readonly"
+        )
+        refresh_rate_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(control_frame, text="秒").pack(side=tk.LEFT)
+        
+        # 手动刷新按钮
+        ttk.Button(control_frame, text="手动刷新", command=self.refresh_virtual_preview).pack(side=tk.RIGHT, padx=5)
+        
+        # 开始/停止预览按钮
+        self.preview_running = False
+        self.preview_button = ttk.Button(control_frame, text="开始预览", command=self.toggle_preview)
+        self.preview_button.pack(side=tk.RIGHT, padx=5)
+        
+        # 初始化预览图像
+        self.preview_image = None
+        
+        # 显示提示信息
+        self.preview_canvas.create_text(
+            200, 150,
+            text="点击'开始预览'查看虚拟屏幕内容",
+            fill="#ffffff",
+            font=(("Arial", 12))
+        )
+    
+    def toggle_preview(self):
+        """
+        切换预览状态
+        """
+        if self.preview_running:
+            # 停止预览
+            self.preview_running = False
+            self.preview_button.config(text="开始预览")
+            self.preview_status_var.set("预览已停止")
+        else:
+            # 开始预览
+            self.preview_running = True
+            self.preview_button.config(text="停止预览")
+            self.preview_status_var.set("预览中...")
+            # 启动预览更新线程
+            threading.Thread(target=self.preview_loop, daemon=True).start()
+    
+    def preview_loop(self):
+        """
+        预览更新循环
+        """
+        import time
+        frame_count = 0
+        start_time = time.time()
+        
+        while self.preview_running:
+            # 记录开始时间
+            frame_start = time.time()
+            
+            # 更新预览
+            self.root.after(0, self.refresh_virtual_preview)
+            
+            # 计算并记录帧时间
+            frame_time = time.time() - frame_start
+            frame_count += 1
+            
+            # 每10帧计算一次帧率
+            if frame_count % 10 == 0:
+                elapsed_time = time.time() - start_time
+                fps = frame_count / elapsed_time
+                logger.debug(f"Preview FPS: {fps:.2f}, Frame time: {frame_time*1000:.2f}ms")
+            
+            # 获取刷新频率
+            refresh_rate = float(self.refresh_rate_var.get())
+            time.sleep(refresh_rate)
+    
+    def refresh_virtual_preview(self):
+        """
+        刷新虚拟屏幕预览
+        """
+        try:
+            # 获取虚拟屏幕信息
+            virtual_display_manager.update_displays_info()
+            virtual_display = virtual_display_manager.get_virtual_display()
+            
+            if not virtual_display:
+                self.preview_status_var.set("未检测到虚拟屏幕")
+                return
+            
+            # 获取虚拟屏幕的位置和大小
+            left = virtual_display['left']
+            top = virtual_display['top']
+            width = virtual_display['width']
+            height = virtual_display['height']
+            
+            # 截图虚拟屏幕区域（使用mss库提高性能）
+            self.preview_status_var.set("正在截图...")
+            
+            # 使用mss进行快速截图
+            with mss() as sct:
+                # 创建截图区域
+                monitor = {
+                    "left": left,
+                    "top": top,
+                    "width": width,
+                    "height": height
+                }
+                # 直接从内存获取像素数据
+                screenshot = sct.grab(monitor)
+                # 转换为numpy数组（OpenCV格式）
+                img_np = np.array(screenshot)[:, :, :3]  # 去除alpha通道
+            
+            # 调整截图大小以适应画布
+            canvas_width = self.preview_canvas.winfo_width()
+            canvas_height = self.preview_canvas.winfo_height()
+            
+            if canvas_width > 0 and canvas_height > 0:
+                # 计算缩放比例
+                scale = min(canvas_width / width, canvas_height / height)
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                
+                # 使用OpenCV进行高效图像缩放
+                # INTER_LINEAR：双线性插值，速度快，质量好
+                # INTER_AREA：区域插值，适合缩小图像
+                interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+                img_resized = cv2.resize(img_np, (new_width, new_height), interpolation=interpolation)
+                
+                # 将OpenCV图像转换为PIL图像
+                # OpenCV使用BGR格式，需要转换为RGB格式
+                img_resized = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+                resized_screenshot = Image.fromarray(img_resized)
+                
+                # 转换为Tkinter图像
+                self.preview_image = ImageTk.PhotoImage(resized_screenshot)
+                
+                # 清除画布
+                self.preview_canvas.delete("all")
+                
+                # 计算居中位置
+                x = (canvas_width - new_width) // 2
+                y = (canvas_height - new_height) // 2
+                
+                # 显示图像
+                self.preview_canvas.create_image(x, y, anchor=tk.NW, image=self.preview_image)
+                
+                self.preview_status_var.set(f"预览中 - 分辨率: {width}x{height}")
+        except Exception as e:
+            logger.error(f"刷新虚拟屏幕预览失败: {e}")
+            self.preview_status_var.set(f"预览错误: {str(e)}")
     
     def create_log_page(self, parent):
         """
