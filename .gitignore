@@ -53,9 +53,12 @@ pytest_cache/
 *.coverage
 coverage.xml
 
-# 私有仓库内容
-games/
-.trae/
+# 私有仓库内容（已移除 - 这是私有仓库）
 
 # 临时文件夹
 Game_Script_public/
+
+# 大文件和驱动程序
+*.exe
+*.zip
+parsec-vdd-cli/
