@@ -458,13 +458,7 @@ class BackgroundWindows(Windows):
                 return self._send_click_message((client_x, client_y), safe_duration, right_click)
             
             elif self.click_method == 'sendinput':
-                return self.independent_mouse.click_background_fallback(
-                    int(screen_x), 
-                    int(screen_y), 
-                    right_click, 
-                    self.sendinput_restore_pos,
-                    duration=duration
-                )
+                return self.independent_mouse.click_background_fallback(int(screen_x), int(screen_y), right_click, self.sendinput_restore_pos)
             
         except Exception as e:
             logger.error(f"❌ 后台点击异常：{e}", exc_info=True)

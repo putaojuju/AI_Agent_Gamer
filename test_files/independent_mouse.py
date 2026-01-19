@@ -43,7 +43,7 @@ class MOUSEINPUT(ctypes.Structure):
         ("mouseData", wintypes.DWORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_void_p),
+        ("dwExtraInfo", ctypes.c_ulonglong),  # 使用c_ulonglong替代ULONG_PTR
     ]
 
 class INPUT(ctypes.Structure):
@@ -447,55 +447,60 @@ class IndependentMouse:
         # 发送鼠标移动消息
         return self.send_mouse_message(hwnd, client_x, client_y, win32con.WM_MOUSEMOVE)
     
-    def click_background_fallback(self, x, y, right_click=False, restore_pos=True, duration=0.05):
+    def click_background_fallback(self, x, y, right_click=False, restore_pos=True):
         """
-        SendInput 瞬移点击实现
+        当后台消息无效时的备选方案：瞬移点击
+        原理：
+        1. 保存当前鼠标位置
+        2. 移动到目标位置 (虚拟屏幕)
+        3. 物理点击 (SendInput)
+        4. 恢复鼠标位置 (可选)
+        
+        整个过程极快（毫秒级），肉眼几乎不可见，只感觉鼠标轻微抖动
         Args:
             x: 虚拟屏幕上的绝对坐标
             y: 虚拟屏幕上的绝对坐标
             right_click: 是否右键点击
             restore_pos: 是否恢复鼠标位置 (默认True，设为False可观察鼠标移动)
-            duration: 点击持续时间 (秒)
         Returns:
             bool: 是否点击成功
         """
         original_pos = None
         try:
             # 1. 保存当前鼠标位置
-            if restore_pos:
-                original_pos = win32api.GetCursorPos()
+            original_pos = win32api.GetCursorPos()
+            logger.debug(f"瞬移点击 - 保存当前鼠标位置：{original_pos}")
             
-            # 2. 移动到目标位置 (使用 API 直接移动，不走 SendInput 事件队列，更快)
+            # 2. 移动到目标位置 (虚拟屏幕)
             win32api.SetCursorPos((x, y))
+            logger.debug(f"瞬移点击 - 移动到目标位置：({x}, {y})")
             
             # 3. 物理点击 (使用 SendInput)
             button_down = win32con.MOUSEEVENTF_RIGHTDOWN if right_click else win32con.MOUSEEVENTF_LEFTDOWN
             button_up = win32con.MOUSEEVENTF_RIGHTUP if right_click else win32con.MOUSEEVENTF_LEFTUP
             
-            # 发送按下
+            # 发送鼠标按下事件
             self.send_mouse_input(0, 0, button_down)
+            time.sleep(0.1)  # 增加延迟确保游戏接收
+            # 发送鼠标释放事件
+            self.send_mouse_input(0, 0, button_up)
+            logger.debug(f"瞬移点击 - 已执行物理点击")
             
-            # 等待 (模拟按住)
-            time.sleep(duration)
+            # 4. 恢复鼠标位置 (可选)
+            if restore_pos:
+                win32api.SetCursorPos(original_pos)
+                logger.debug(f"瞬移点击 - 恢复鼠标位置：{original_pos}")
             
             return True
         except Exception as e:
             logger.error(f"瞬移点击失败：{e}")
-            return False
-        finally:
-            # 4. 确保发送释放事件 (必须执行，否则会导致长按不放)
-            try:
-                button_up = win32con.MOUSEEVENTF_RIGHTUP if right_click else win32con.MOUSEEVENTF_LEFTUP
-                self.send_mouse_input(0, 0, button_up)
-            except Exception as e:
-                logger.error(f"发送鼠标释放事件失败: {e}")
-
-            # 5. 恢复鼠标位置
-            if restore_pos and original_pos:
+            # 尝试恢复鼠标位置
+            if original_pos and restore_pos:
                 try:
                     win32api.SetCursorPos(original_pos)
                 except:
                     pass
+            return False
 
 # 单例模式
 independent_mouse = IndependentMouse()
