@@ -24,6 +24,13 @@ __pycache__/
 *.ini
 *.cfg
 *.conf
+*_config.json
+ai_config.json
+
+# API密钥和敏感信息
+*api_key*
+*secret*
+*.env.local
 
 # 临时文件
 *.tmp

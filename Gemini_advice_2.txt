@@ -1,0 +1,109 @@
+既然你拥有 Doubao Seed 1.8 (豆包旗舰模型) 的免费使用权，那简直是如虎添翼！豆包的视觉模型（Doubao-Vision-Pro）在中文语境理解和图像识别能力上非常强悍，完全能够胜任游戏 Agent 的大脑。
+使用豆包模型（通过火山引擎 Ark 平台）的最佳方式是利用其 OpenAI 兼容接口。这意味着我们不需要学一套新的 API，只需要改一下 base_url 和 model ID 即可。
+以下是为 Trae IDE 准备的、专门针对接入豆包大模型的执行计划。
+🧠 Project Evolution: Integrating Doubao AI Agent
+Objective:
+Empower the automation script with "Vision" and "Cognition" capabilities using the Doubao-1.8-Vision model via Volcengine (Ark) API. This allows the script to handle unknown game states, pop-ups, and complex logic by "looking" at the screen and "thinking."
+Core Tech Stack:
+Brain: volcengine (via openai SDK compatible mode).
+Vision: Base64 encoded screenshots from BackgroundWindows.
+Protocol: OpenAI Chat Completions API.
+Phase 1: Create ai_brain.py (The Doubao Wrapper)
+Goal: Create a module that handles communication with the Doubao API, image encoding, and coordinate parsing.
+Requirements for AI:
+Dependencies: Use standard openai library (it supports Volcengine endpoints).
+Class Structure: class DoubaoBrain.
+Inputs: api_key, model_endpoint_id (Doubao uses endpoint IDs like ep-2024...), screenshot (PIL Image).
+Image Handling:
+Resize image to max 1920x1080 (to ensure stability).
+Convert to Base64 string.
+System Prompt (Crucial):
+Define the AI as a "Pro Game Assistant".
+Output Format: Strictly JSON.
+Coordinates: Return normalized coordinates (0.0 - 1.0) to handle resolution differences.
+Reasoning: Ask the AI to explain why it decided to click there.
+Code Structure for Trae:
+code
+Python
+import base64
+import json
+import io
+from openai import OpenAI
+
+class DoubaoBrain:
+    def __init__(self, api_key, model_endpoint):
+        # Volcengine Base URL
+        self.client = OpenAI(
+            api_key=api_key, 
+            base_url="https://ark.cn-beijing.volces.com/api/v3"
+        )
+        self.model = model_endpoint
+        self.history = []
+
+    def _image_to_base64(self, image):
+        # Resize if too big (optional but recommended for speed)
+        image.thumbnail((1280, 720)) 
+        buffered = io.BytesIO()
+        image.save(buffered, format="JPEG", quality=80)
+        return base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+    def analyze(self, screenshot, instruction):
+        b64_img = self._image_to_base64(screenshot)
+        
+        system_prompt = """
+        你是游戏自动化助手。请分析截图并根据指令做出决策。
+        必须返回纯 JSON 格式，不要包含 Markdown 标记：
+        {
+            "analysis": "分析当前界面状态...",
+            "action": "click" | "wait" | "stop",
+            "target": [x_ratio, y_ratio], // 0.0-1.0 的相对坐标
+            "message": "简短的操作说明"
+        }
+        如果是点击操作，请确保坐标精准对应按钮中心。
+        """
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": instruction},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
+                    ]}
+                ],
+            )
+            # Parse JSON from response content
+            content = response.choices[0].message.content
+            # Cleanup markdown if present
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            return json.loads(content)
+        except Exception as e:
+            print(f"Doubao API Error: {e}")
+            return None
+Phase 2: Update Script Manager UI (script_manager.py)
+Goal: Allow users to input their Volcengine credentials.
+Action Items:
+Add Settings Fields:
+In the "Settings" dialog (or config area), add inputs for:
+Doubao API Key
+Model Endpoint ID (e.g., ep-20250101-xxxxx)
+Save to Config: Update save_config and load_config to persist these keys in screenshot_config.json (or a new ai_config.json).
+Phase 3: Integrate into dungeon.py
+Goal: Implement the "AI Fallback" mechanism.
+Action Items:
+Load Config: Read the API key and Endpoint ID from the config file at script start.
+Initialize Brain: brain = DoubaoBrain(api_key, endpoint_id).
+Create Smart Function: smart_solve(instruction)
+Take a snapshot.
+Call brain.analyze.
+Convert returned (0.5, 0.5) coordinates to actual (1920, 1080) coordinates.
+Execute safe_touch.
+Usage: Replace the final except block or complex logic branches with smart_solve("我现在卡住了，请看图判断该点哪里能继续战斗？").
+💡 独家提示（针对豆包模型）
+请务必告诉 Trae 这一条针对豆包的特殊处理：
+"Important Note for Doubao/Volcengine:"
+Volcengine does not use generic model names like 'gpt-4'. It uses Endpoint IDs (e.g., ep-20240501000000-abcde).
+The UI must allow the user to input this specific Endpoint ID string as the 'Model Name'.
+你可以直接复制上面的英文计划发给 Trae。这会让你的脚本拥有真正的视觉思考能力！
