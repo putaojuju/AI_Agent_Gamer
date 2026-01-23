@@ -55,19 +55,68 @@ class DoubaoBrain:
 {
     "analysis": "分析当前界面状态...",
     "action": "click" | "wait" | "stop" | "none",
-    "target": [x_ratio, y_ratio],  // 0.0-1.0 的相对坐标
+    "target_text": "按钮上的文字",  // 优先：如果是包含文字的按钮，请返回按钮上的文字
+    "target": [x_ratio, y_ratio],  // 备用：如果没有文字或无法识别，再用坐标 (0.0-1.0)
     "message": "简短的操作说明",
     "confidence": 0.0-1.0  // 置信度
 }
 
 规则：
-1. 如果是点击操作，请确保坐标精准对应按钮中心
-2. 如果无法识别或需要等待，action 设为 "wait"
-3. 如果遇到致命错误或无法处理的情况，action 设为 "stop"
-4. 如果当前状态正常无需操作，action 设为 "none"
-5. target 坐标使用归一化格式 (0.0-1.0)，左上角为 (0,0)，右下角为 (1,1)
-6. confidence 表示你对决策的信心程度 (0.0-1.0)
+1. 如果是包含文字的按钮，请优先返回 target_text 字段，而不是 target 坐标
+2. target_text 应该是按钮上显示的完整文字，如"开始行动"、"确认"、"签到"等
+3. 如果无法识别文字或按钮没有文字，再使用 target 坐标
+4. 如果无法识别或需要等待，action 设为 "wait"
+5. 如果遇到致命错误或无法处理的情况，action 设为 "stop"
+6. 如果当前状态正常无需操作，action 设为 "none"
+7. target 坐标使用归一化格式 (0.0-1.0)，左上角为 (0,0)，右下角为 (1,1)
+8. confidence 表示你对决策的信心程度 (0.0-1.0)
+9. 截图上已绘制辅助网格，帮助你更准确地估算坐标（当 OCR 无法使用时）
 """
+    
+    def _add_grid_overlay(self, image: Image.Image, grid_size: int = 4) -> Image.Image:
+        """
+        在图像上添加辅助网格，帮助 AI 更准确地估算坐标
+        
+        Args:
+            image: PIL 图像对象
+            grid_size: 网格大小 (3 或 4)，默认 4
+        
+        Returns:
+            添加了网格的 PIL 图像对象
+        """
+        img_width, img_height = image.size
+        draw = ImageDraw.Draw(image, 'RGBA')
+        
+        # 网格颜色：半透明红色
+        grid_color = (255, 0, 0, 80)
+        axis_color = (255, 0, 0, 150)
+        
+        # 绘制垂直线
+        for i in range(1, grid_size):
+            x = int(img_width * i / grid_size)
+            draw.line([(x, 0), (x, img_height)], fill=grid_color, width=1)
+        
+        # 绘制水平线
+        for i in range(1, grid_size):
+            y = int(img_height * i / grid_size)
+            draw.line([(0, y), (img_width, y)], fill=grid_color, width=1)
+        
+        # 绘制坐标轴（左上角）
+        axis_length = min(img_width, img_height) // 10
+        draw.line([(0, 0), (axis_length, 0)], fill=axis_color, width=2)
+        draw.line([(0, 0), (0, axis_length)], fill=axis_color, width=2)
+        
+        # 添加坐标标记
+        try:
+            from PIL import ImageFont
+            font = ImageFont.truetype("arial.ttf", 12)
+        except:
+            font = ImageFont.load_default()
+        
+        draw.text((5, 5), "X", fill=axis_color, font=font)
+        draw.text((5, 15), "Y", fill=axis_color, font=font)
+        
+        return image
     
     def _image_to_base64(self, image: Image.Image, max_size: int = 1280) -> str:
         """
@@ -199,7 +248,7 @@ class DoubaoBrain:
         
         return pixel_x, pixel_y
     
-    def analyze(self, screenshot: Image.Image, instruction: str, save_debug: bool = True) -> Optional[Dict]:
+    def analyze(self, screenshot: Image.Image, instruction: str, save_debug: bool = True, use_grid: bool = True) -> Optional[Dict]:
         """
         分析截图并返回决策
         
@@ -207,18 +256,27 @@ class DoubaoBrain:
             screenshot: PIL 图像对象
             instruction: 用户指令
             save_debug: 是否保存调试快照
+            use_grid: 是否添加辅助网格，默认 True
         
         Returns:
             分析结果字典，包含：
             - analysis: 界面分析
             - action: 操作类型 (click/wait/stop/none)
+            - target_text: 目标文字（如果有）
             - target: 目标坐标 [x_ratio, y_ratio]
             - message: 操作说明
             - confidence: 置信度
         """
         try:
+            # 复制图像以避免修改原图
+            image = screenshot.copy()
+            
+            # 添加辅助网格
+            if use_grid:
+                image = self._add_grid_overlay(image)
+            
             # 转换图像为 Base64
-            b64_img = self._image_to_base64(screenshot)
+            b64_img = self._image_to_base64(image)
             
             # 构建消息
             messages = [

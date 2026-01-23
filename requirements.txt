@@ -1,12 +1,10 @@
-numpy
-airtest
-psutil
-pywin32
+rapidocr_onnxruntime
+langchain
+langchain-community
+langchain-openai
 opencv-python
-mss
-pyperclip
-tkinterdnd2
-openai
-# Virtual Screen Dependencies
-# - Parsec VDD Driver (https://builds.parsec.app/vdd/parsec-vdd-0.41.0.0.exe)
-# - parsec-vdd-cli (https://github.com/HaliComing/parsec-vdd-cli)
+pillow
+pywin32
+numpy
+keyboard
+psutil
