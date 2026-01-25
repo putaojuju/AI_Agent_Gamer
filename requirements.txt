@@ -8,3 +8,4 @@ pywin32
 numpy
 keyboard
 psutil
+customtkinter
