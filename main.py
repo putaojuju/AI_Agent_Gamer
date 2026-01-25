@@ -88,67 +88,121 @@ class SettingsDialog(ctk.CTkToplevel):
         self.parent.add_log("系统配置已更新", type="SYSTEM")
         self.destroy()
 
-class ModernLogCard(ctk.CTkFrame):
-    """双层结构日志卡片"""
+class CoTLogCard(ctk.CTkFrame):
+    """
+    思维链日志卡片 (Chain of Thought Log Card)
+    支持：日期时间 + 小标题 + 折叠的详细 DEBUG 信息
+    """
     COLORS = {
-        "THOUGHT": "#9b59b6", "VISION": "#3498db", "ACTION": "#2ecc71", 
-        "SYSTEM": "#95a5a6", "ERROR": "#e74c3c"
+        "THOUGHT": "#9b59b6", # 紫色 - 思考
+        "VISION": "#3498db",  # 蓝色 - 视觉
+        "ACTION": "#2ecc71",  # 绿色 - 执行
+        "SYSTEM": "#95a5a6",  # 灰色 - 系统
+        "ERROR": "#e74c3c",   # 红色 - 错误
+        "WARNING": "#f39c12"  # 橙色 - 警告
     }
     ICONS = {
         "THOUGHT": "🧠", "VISION": "👁️", "ACTION": "🖱️", 
-        "SYSTEM": "⚙️", "ERROR": "❌"
+        "SYSTEM": "⚙️", "ERROR": "❌", "WARNING": "⚠️"
     }
 
     def __init__(self, master, log_data: dict, **kwargs):
         super().__init__(master, fg_color="#2b2b2b", corner_radius=6, **kwargs)
+        
+        # 1. 数据解析
         raw_type = log_data.get("type", "SYSTEM")
         self.type = raw_type.upper() if raw_type else "SYSTEM"
-        self.text = log_data.get("text", "Info")
+        self.title = log_data.get("title", log_data.get("text", "Info")) # 兼容旧字段 text
         self.detail = log_data.get("detail", "")
+        
+        # 时间戳处理 (格式: MM-DD HH:MM:SS)
         ts = log_data.get("time", time.time())
-        self.timestamp = time.strftime("%H:%M:%S", time.localtime(ts))
+        self.timestamp = time.strftime("%m-%d %H:%M:%S", time.localtime(ts))
         
         self.is_expanded = False
-        accent_color = self.COLORS.get(self.type, "#95a5a6")
-        icon = self.ICONS.get(self.type, "📝")
+        self.accent_color = self.COLORS.get(self.type, "#95a5a6")
+        self.icon = self.ICONS.get(self.type, "📝")
 
-        self.bar = ctk.CTkFrame(self, width=4, fg_color=accent_color, corner_radius=0)
+        # 2. 布局结构
+        # 左侧彩色条 (指示类型)
+        self.bar = ctk.CTkFrame(self, width=4, fg_color=self.accent_color, corner_radius=0)
         self.bar.pack(side="left", fill="y", padx=(0, 5))
 
+        # 内容容器
         self.content_box = ctk.CTkFrame(self, fg_color="transparent")
         self.content_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
 
+        # === 头部区域 (常驻显示) ===
         self.header_frame = ctk.CTkFrame(self.content_box, fg_color="transparent")
         self.header_frame.pack(fill="x")
+        
+        # 绑定点击事件到头部，实现点击任意位置折叠/展开
         self.header_frame.bind("<Button-1>", self.toggle_expand)
+        
+        # 时间戳 Label
+        self.time_label = ctk.CTkLabel(
+            self.header_frame, 
+            text=f"[{self.timestamp}]", 
+            text_color="#7f8c8d", 
+            font=ctk.CTkFont(family="Consolas", size=10)
+        )
+        self.time_label.pack(side="left", padx=(0, 5))
+        self.time_label.bind("<Button-1>", self.toggle_expand)
 
-        title_text = f"[{self.timestamp}] {icon} {self.text}"
-        self.info_label = ctk.CTkLabel(self.header_frame, text=title_text, font=ctk.CTkFont(size=12, weight="bold"), anchor="w", text_color="#ecf0f1")
+        # 标题 Label
+        title_text = f"{self.icon} {self.title}"
+        self.info_label = ctk.CTkLabel(
+            self.header_frame, 
+            text=title_text, 
+            font=ctk.CTkFont(size=12, weight="bold"), 
+            anchor="w", 
+            text_color="#ecf0f1"
+        )
         self.info_label.pack(side="left", fill="x", expand=True)
         self.info_label.bind("<Button-1>", self.toggle_expand)
 
+        # 折叠指示器 (如果有详细信息才显示)
         if self.detail:
-            self.expand_btn = ctk.CTkLabel(self.header_frame, text="▼", width=20, text_color="#7f8c8d", font=ctk.CTkFont(size=10))
-            self.expand_btn.pack(side="right")
-            self.expand_btn.bind("<Button-1>", self.toggle_expand)
+            self.indicator = ctk.CTkLabel(
+                self.header_frame, 
+                text="▶", # 默认折叠状态
+                width=20, 
+                text_color="#7f8c8d", 
+                font=ctk.CTkFont(size=10)
+            )
+            self.indicator.pack(side="right")
+            self.indicator.bind("<Button-1>", self.toggle_expand)
             
-            self.detail_text = ctk.CTkTextbox(self.content_box, height=0, fg_color="#1e1e1e", text_color="#bdc3c7", font=ctk.CTkFont(family="Consolas", size=11), activate_scrollbars=False)
+            # === 详细区域 (默认隐藏) ===
+            # 使用 Textbox 显示大量文本/JSON，支持复制
+            self.detail_text = ctk.CTkTextbox(
+                self.content_box, 
+                height=0, 
+                fg_color="#1e1e1e", 
+                text_color="#bdc3c7", 
+                font=ctk.CTkFont(family="Consolas", size=11),
+                activate_scrollbars=False
+            )
             self.detail_text.insert("0.0", str(self.detail))
-            self.detail_text.configure(state="disabled")
+            self.detail_text.configure(state="disabled") # 只读模式
 
     def toggle_expand(self, event=None):
+        """切换折叠状态"""
         if not self.detail: return
+        
         self.is_expanded = not self.is_expanded
+        
         if self.is_expanded:
-            self.expand_btn.configure(text="▲")
+            self.indicator.configure(text="▼") # 展开箭头
             self.detail_text.pack(fill="x", pady=(5, 0))
-            try:
-                line_count = int(self.detail_text.index('end-1c').split('.')[0])
-                new_height = min(200, max(60, line_count * 16))
-            except: new_height = 100
+            
+            # 动态计算高度 (根据行数，最多显示15行，之后滚动)
+            line_count = int(self.detail_text.index('end-1c').split('.')[0])
+            new_height = min(300, max(60, line_count * 18))
+            
             self.detail_text.configure(height=new_height, activate_scrollbars=True)
         else:
-            self.expand_btn.configure(text="▼")
+            self.indicator.configure(text="▶") # 折叠箭头
             self.detail_text.pack_forget()
             self.detail_text.configure(height=0)
 
@@ -182,7 +236,7 @@ class ThoughtStreamPanel(ctk.CTkFrame):
             self._render_card(log_data)
 
     def _render_card(self, log_data):
-        card = ModernLogCard(self.scroll_frame, log_data)
+        card = CoTLogCard(self.scroll_frame, log_data)
         card.pack(fill="x", pady=2, padx=5)
         if self.auto_scroll:
             self.update_idletasks()
