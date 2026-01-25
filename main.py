@@ -510,7 +510,8 @@ class AICmdCenter(ctk.CTk):
                 break
             
     def add_log(self, text, detail="", type="SYSTEM"):
-        self.ui_queue.put({"text": text, "detail": detail, "type": type})
+        # 将 key 从 "text" 改为 "title"，与 SmartAgent 保持一致
+        self.ui_queue.put({"title": text, "detail": detail, "type": type})
     
     def test_snapshot(self):
         img = self.game_window_driver.snapshot()

@@ -11,7 +11,6 @@ import win32ui
 import win32con
 import numpy as np
 import logging
-import ctypes
 
 class GameWindow:
     def __init__(self):

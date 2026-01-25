@@ -1,6 +1,7 @@
 import threading
 import base64
 import io
+import json
 from PIL import Image
 import numpy as np
 import win32gui
@@ -172,10 +173,12 @@ class SmartAgent:
             
             # 输出AI思考过程
             if self.ui_queue:
+                # 优化：使用 json.dumps 让字典显示更漂亮
+                formatted_data = json.dumps(ai_data, indent=2, ensure_ascii=False)
                 self.ui_queue.put({
                     "type": "THOUGHT",
                     "title": f"AI 思考中: {thought[:20]}..." if thought else "AI 分析中...",
-                    "detail": f"完整思考:\n{thought}\n\n原始数据:\n{ai_data}"
+                    "detail": f"完整思考:\n{thought}\n\n原始数据:\n{formatted_data}"
                 })
                 if reason:
                     self.ui_queue.put({"title": f"AI理由: {reason}", "type": "SYSTEM"})
