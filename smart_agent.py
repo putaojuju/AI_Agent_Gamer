@@ -11,8 +11,8 @@ from config_manager import ConfigManager
 import time
 
 class SmartAgent:
-    def __init__(self, ui_queue: Optional[Any] = None):
-        self.game_window = GameWindow()
+    def __init__(self, ui_queue: Optional[Any] = None, game_window: Optional[GameWindow] = None):
+        self.game_window = game_window if game_window else GameWindow()
         self.mouse_controller = MouseController()
         self.ai_brain = AIBrain()
         self.config_manager = ConfigManager()
@@ -35,20 +35,30 @@ class SmartAgent:
         except Exception:
             return ""
     
-    def start(self, window_title: str):
+    def start(self, window_title: Optional[str] = None):
         """启动智能代理"""
-        success = self.game_window.init_hwnd(window_title)
-        if not success:
-            if self.ui_queue:
-                self.ui_queue.put({"text": f"无法找到游戏窗口: {window_title}", "type": "error"})
-            return False
+        if window_title is not None:
+            success = self.game_window.init_hwnd(window_title)
+            if not success:
+                if self.ui_queue:
+                    self.ui_queue.put({"text": f"无法找到游戏窗口: {window_title}", "type": "error"})
+                return False
+        else:
+            # 如果window_title为None，信任现有的self.game_window.hwnd
+            if not self.game_window.hwnd:
+                if self.ui_queue:
+                    self.ui_queue.put({"text": "游戏窗口未初始化，请先连接窗口", "type": "error"})
+                return False
         
         self.running = True
         self.agent_thread = threading.Thread(target=self.run, daemon=True)
         self.agent_thread.start()
         
         if self.ui_queue:
-            self.ui_queue.put({"text": f"智能代理已启动，正在监控游戏窗口: {window_title}", "type": "success"})
+            if window_title:
+                self.ui_queue.put({"text": f"智能代理已启动，正在监控游戏窗口: {window_title}", "type": "success"})
+            else:
+                self.ui_queue.put({"text": "智能代理已启动，正在监控已连接的游戏窗口", "type": "success"})
         
         return True
     

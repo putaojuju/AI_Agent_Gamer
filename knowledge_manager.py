@@ -76,6 +76,8 @@ class KnowledgeBase:
             是否加载成功
         """
         try:
+            # 修复路径遍历风险
+            game_name = os.path.basename(game_name) # 去除路径
             filepath = os.path.join(self.knowledge_dir, f"{game_name}.json")
             
             if not os.path.exists(filepath):

@@ -1,7 +1,25 @@
 import win32api
 import win32con
 import ctypes
+import traceback
+import logging
 from typing import Optional
+
+# 配置日志
+log_dir = "log"
+import os
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, 'mouse_controller.log'), encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger('mouse_controller')
 
 class MouseController:
     def __init__(self):
@@ -38,7 +56,9 @@ class MouseController:
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"鼠标点击失败: {e}")
+            logger.debug(traceback.format_exc())
             return False
     
     def double_click(self, window_x: int, window_y: int, hwnd: Optional[int] = None) -> bool:
@@ -60,7 +80,9 @@ class MouseController:
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"鼠标双击失败: {e}")
+            logger.debug(traceback.format_exc())
             return False
     
     def right_click(self, window_x: int, window_y: int, hwnd: Optional[int] = None) -> bool:
@@ -81,7 +103,9 @@ class MouseController:
             win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
             
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"鼠标右键点击失败: {e}")
+            logger.debug(traceback.format_exc())
             return False
     
     def move(self, window_x: int, window_y: int, hwnd: Optional[int] = None) -> bool:
@@ -97,5 +121,7 @@ class MouseController:
             
             win32api.SetCursorPos((screen_x, screen_y))
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"鼠标移动失败: {e}")
+            logger.debug(traceback.format_exc())
             return False

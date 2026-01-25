@@ -215,8 +215,7 @@ class AICmdCenter(ctk.CTk):
         self.ui_queue = queue.Queue()
         
         self.game_window_driver = GameWindow() 
-        self.agent = SmartAgent(ui_queue=self.ui_queue)
-        self.agent.game_window = self.game_window_driver 
+        self.agent = SmartAgent(ui_queue=self.ui_queue, game_window=self.game_window_driver)
         
         # 窗口映射字典
         self.window_map = {}
@@ -424,10 +423,21 @@ class AICmdCenter(ctk.CTk):
         while self.running:
             try:
                 msg = self.ui_queue.get(timeout=0.1)
-                if "image" in msg: self.master.after(0, self.update_preview, msg["image"])
-                self.master.after(0, lambda: self.thought_panel.add_log(msg))
+                if "image" in msg: 
+                    try:
+                        self.after(0, self.update_preview, msg["image"])
+                    except Exception:
+                        pass
+                try:
+                    self.after(0, lambda: self.thought_panel.add_log(msg))
+                except Exception:
+                    pass
                 self.ui_queue.task_done()
-            except queue.Empty: continue
+            except queue.Empty: 
+                continue
+            except Exception:
+                # 捕获UI已销毁的异常
+                break
             
     def add_log(self, text, detail="", type="SYSTEM"):
         self.ui_queue.put({"text": text, "detail": detail, "type": type})

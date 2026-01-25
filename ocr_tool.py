@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-OCR 工具模块 - 基于 EasyOCR
+OCR 工具模块 - 基于 RapidOCR (封装 vision_core.py)
 实现文字识别和定位功能，支持中文
 """
 
@@ -28,7 +28,7 @@ logger = logging.getLogger('ocr_tool')
 
 class OCRTool:
     """
-    OCR 工具类，封装 EasyOCR 功能
+    OCR 工具类，封装 vision_core.py 的 RapidOCR 功能
     
     提供线程安全的文字识别和定位功能
     """
@@ -38,7 +38,7 @@ class OCRTool:
         初始化 OCR 工具
         """
         self._lock = threading.Lock()
-        self._ocr_reader = None
+        self._ocr_engine = None
         self._initialized = False
         logger.info("OCR 工具初始化中...")
     
@@ -50,12 +50,15 @@ class OCRTool:
             with self._lock:
                 if not self._initialized:
                     try:
-                        import easyocr
-                        self._ocr_reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+                        from vision_core import VisionCore
+                        # 创建 VisionCore 实例（使用屏幕截图模式）
+                        self._vision_core = VisionCore(hwnd=None)
+                        # 确保 OCR 引擎初始化
+                        self._vision_core._ensure_ocr()
                         self._initialized = True
                         logger.info("OCR 引擎初始化成功")
                     except ImportError:
-                        logger.error("easyocr 未安装，请运行: pip install easyocr")
+                        logger.error("vision_core 未找到，请确保项目结构正确")
                         raise
                     except Exception as e:
                         logger.error(f"OCR 引擎初始化失败: {e}")
@@ -78,29 +81,29 @@ class OCRTool:
         
         with self._lock:
             try:
-                # 将 PIL 图像转换为 numpy 数组
+                # 转换为 numpy 数组
                 img_array = np.array(image)
                 
                 # 如果图像是 RGBA，转换为 RGB
                 if len(img_array.shape) == 3 and img_array.shape[-1] == 4:
                     img_array = img_array[:, :, :3]
                 
-                # 调用 OCR 引擎识别
-                result = self._ocr_reader.readtext(img_array)
+                # 调用 OCR
+                result, _ = self._vision_core._ocr_engine(img_array)
                 
                 if not result:
                     logger.debug(f"未识别到任何文字")
                     return None
                 
-                # 遍历识别结果，查找匹配的文字
+                # 查找匹配的文字
                 best_match = None
                 best_confidence = 0.0
                 
                 for item in result:
-                    box, text, confidence = item
+                    box, (ocr_text, confidence) = item[0], item[1]
                     
                     # 检查是否匹配目标文字
-                    if target_text in text:
+                    if target_text in ocr_text:
                         if confidence > best_confidence and confidence >= confidence_threshold:
                             best_confidence = confidence
                             
@@ -110,7 +113,7 @@ class OCRTool:
                             center_y = int(np.mean(box_array[:, 1]))
                             
                             best_match = (center_x, center_y, confidence)
-                            logger.info(f"找到文字 '{target_text}' (识别为: '{text}') 坐标: ({center_x}, {center_y}) 置信度: {confidence:.2f}")
+                            logger.info(f"找到文字 '{target_text}' (识别为: '{ocr_text}') 坐标: ({center_x}, {center_y}) 置信度: {confidence:.2f}")
                 
                 if best_match:
                     return best_match
@@ -142,14 +145,14 @@ class OCRTool:
                 if len(img_array.shape) == 3 and img_array.shape[-1] == 4:
                     img_array = img_array[:, :, :3]
                 
-                result = self._ocr_reader.readtext(img_array)
+                result, _ = self._vision_core._ocr_engine(img_array)
                 
                 if not result:
                     return []
                 
                 text_list = []
                 for item in result:
-                    box, text, confidence = item
+                    box, (text, confidence) = item[0], item[1]
                     
                     if confidence >= confidence_threshold:
                         box_array = np.array(box)
@@ -186,7 +189,7 @@ class OCRTool:
                 if len(img_array.shape) == 3 and img_array.shape[-1] == 4:
                     img_array = img_array[:, :, :3]
                 
-                result = self._ocr_reader.readtext(img_array)
+                result, _ = self._vision_core._ocr_engine(img_array)
                 
                 if not result:
                     return None
@@ -197,7 +200,7 @@ class OCRTool:
                 best_similarity = 0.0
                 
                 for item in result:
-                    box, text, confidence = item
+                    box, (text, confidence) = item[0], item[1]
                     
                     if confidence >= confidence_threshold:
                         # 计算相似度

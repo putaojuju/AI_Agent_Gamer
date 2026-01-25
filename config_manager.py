@@ -78,9 +78,13 @@ class ConfigManager:
         try:
             for k in keys:
                 value = value[k]
-            return value
+            # 增加环境变量覆盖
+            env_key = key_path.upper().replace('.', '_') # 如 AI_API_KEY
+            return os.environ.get(env_key, value)
         except (KeyError, TypeError):
-            return default
+            # 即使配置文件中不存在，也尝试从环境变量获取
+            env_key = key_path.upper().replace('.', '_')
+            return os.environ.get(env_key, default)
 
     def set(self, key_path, value):
         """设置配置值"""
