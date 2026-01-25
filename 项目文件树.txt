@@ -1,94 +1,141 @@
-# Game_script 项目文件树
+# 游戏脚本自动化项目文件树
 
-## 根目录文件
-- .gitignore
-- ai_brain.py
-- config_manager.py
-- env_check.py
-- game_window.py
-- knowledge_manager.py
-- log_formatter.py
-- main.py
-- mouse_controller.py
-- ocr_tool.py
-- performance_monitor.py
-- README.md
-- requirements.txt
-- screenshot_config.json
-- screenshot_history.json
-- screenshot_tool.py
-- smart_agent.py
-- test_ui.py
-- vision_core.py
-- 主程序.bat
-- 使用Conda环境运行.bat
-- 启动截图工具.bat
-- 启动管理器.bat
-- 项目文件树.txt
+## 根目录结构
+```
+Game_script/
+├─ _archive/                # 归档文件
+│  └─ test_files/           # 测试文件
+│     ├─ background_windows.py
+│     ├─ control_panel.py
+│     ├─ game_window_manager.py
+│     ├─ independent_mouse.py
+│     ├─ list_windows.py
+│     ├─ performance_monitor.py
+│     ├─ script_manager.py
+│     ├─ script_template.py
+│     ├─ test_button.png
+│     ├─ test_button_click_improved.py
+│     ├─ test_center_click.py
+│     ├─ test_game_click_strict.py
+│     ├─ test_game_compatibility.py
+│     ├─ test_postmessage_direct.py
+│     ├─ test_postmessage_standalone.py
+│     ├─ test_window_operation.py
+│     └─ virtual_display.py
+├─ docs/                    # 文档
+│  ├─ PYTHON_VERSION_MANAGEMENT.md
+│  └─ virtual_screen_documentation.md
+├─ games/                   # 游戏脚本（私有仓库）
+│  ├─ .trae/               # 私有配置
+│  │  ├─ documents/        # 文档
+│  │  │  ├─ plan_20260117_053231.md
+│  │  │  ├─ plan_20260117_111158.md
+│  │  │  ├─ 下一步优化和测试计划.md
+│  │  │  ├─ 游戏脚本后台运行优化方案.md
+│  │  │  ├─ 游戏脚本后台运行系统性优化方案.md
+│  │  │  ├─ 项目优化与清理计划.md
+│  │  │  ├─ 项目整理和清理计划.md
+│  │  │  └─ 项目系统性优化计划.md
+│  │  └─ rules/
+│  │     └─ project_rules.md
+│  ├─ Girls_Creation_script/  #  Girls Creation 游戏脚本
+│  │  ├─ daily/             # 日常任务脚本
+│  │  │  ├─ __pycache__/
+│  │  │  │  └─ daily.cpython-314.pyc
+│  │  │  ├─ add.png
+│  │  │  ├─ ap_refill.png
+│  │  │  ├─ back.png
+│  │  │  ├─ close.png
+│  │  │  ├─ confirm.png
+│  │  │  ├─ creation.png
+│  │  │  ├─ creation_start.png
+│  │  │  ├─ crystal.png
+│  │  │  ├─ daily.py
+│  │  │  ├─ daily.txt
+│  │  │  ├─ decision.png
+│  │  │  ├─ exchange.png
+│  │  │  ├─ harvest.png
+│  │  │  ├─ home.png
+│  │  │  ├─ hourglass.png
+│  │  │  ├─ museum.png
+│  │  │  ├─ owl.png
+│  │  │  ├─ recovery.png
+│  │  │  ├─ skip.png
+│  │  │  ├─ skip_text.png
+│  │  │  ├─ visitor.png
+│  │  │  └─ workshop.png
+│  │  └─ dungeon/           #  dungeon 任务脚本
+│  │     ├─ __pycache__/
+│  │     │  └─ dungeon.cpython-314.pyc
+│  │     ├─ battle.png
+│  │     ├─ boss.png
+│  │     ├─ cleanup.png
+│  │     ├─ dungeon.png
+│  │     ├─ dungeon.txt
+│  │     ├─ explor.png
+│  │     ├─ locked_skip.png
+│  │     ├─ next.png
+│  │     ├─ one_key_explor.png
+│  │     ├─ skip.png
+│  │     ├─ sortie.png
+│  │     └─ tpl1768233258765.png
+│  ├─ twinkle_starknightsX_script/  #  Twinkle Starknights X 游戏脚本
+│  │  └─ daily/             # 日常任务脚本
+│  │     ├─ __pycache__/
+│  │     │  └─ daily.cpython-314.pyc
+│  │     ├─ Battle_Exercise.png
+│  │     ├─ all_skip.png
+│  │     ├─ back.png
+│  │     ├─ coin.png
+│  │     ├─ daily.py
+│  │     ├─ dark.png
+│  │     ├─ fire.png
+│  │     ├─ hai.png
+│  │     ├─ ok.png
+│  │     ├─ radiance.png
+│  │     ├─ start.png
+│  │     ├─ thunder.png
+│  │     └─ wate.png
+│  ├─ .gitkeep
+│  └─ README.md
+├─ knowledge/               # 游戏知识库 (JSON)
+│  ├─ Girls_Creation_script.json
+│  ├─ twinkle_starknightsX_script.json
+│  └─ ui_atlas_manager.py
+├─ user_data/               # 用户数据 (私密)
+│  └─ .gitkeep
+├─ .gitignore               # Git 忽略规则
+├─ README.md                # 项目说明
+├─ ai_brain.py              # AI 核心
+├─ config_manager.py        # 配置管理
+├─ env_check.py             # 环境检查
+├─ game_window.py           # 游戏窗口管理
+├─ knowledge_manager.py     # 知识库管理
+├─ log_formatter.py         # 日志格式化
+├─ main.py                  # 主入口
+├─ mouse_controller.py      # 鼠标控制
+├─ ocr_tool.py              # OCR 工具
+├─ performance_monitor.py   # 性能监控
+├─ requirements.txt         # 依赖文件
+├─ screenshot_history.json  # 截图历史
+├─ screenshot_tool.py       # 截图工具
+├─ smart_agent.py           # 智能 Agent
+├─ test_ui.py               # UI 测试
+├─ vision_core.py           # 视觉核心
+├─ 使用Conda环境运行.bat     # Conda 环境启动脚本
+├─ 启动器.bat               # 简化启动脚本
+├─ 启动截图工具.bat          # 截图工具启动脚本
+└─ 项目文件树.txt            # 项目文件树
+```
 
-## 子目录结构
+## 仓库管理
+- **公开仓库**: `https://github.com/putaojuju/AI_Agent_Gamer.git`
+  - 包含：核心框架代码、工具类、知识库示例、文档
+  - 排除：`user_data/` 文件夹、`games/` 文件夹、`.trae/` 配置
 
-### .trae/
-- [DIR] documents
-- [DIR] rules
+- **私有仓库**: `https://github.com/putaojuju/My_Script.git`
+  - 包含：`user_data/` 下的用户数据、`games/` 下的具体游戏脚本、`.trae/` 私有配置
 
-### docs/
-- PYTHON_VERSION_MANAGEMENT.md
-- virtual_screen_documentation.md
-
-### games/
-- [DIR] .git
-- [DIR] .trae
-- [DIR] Girls_Creation_script
-- README.md
-- [DIR] twinkle_starknightsX_script
-
-### Game_Script_public/
-- [DIR] .git
-- .gitignore
-- background_windows.py
-- control_panel.py
-- game_window_manager.py
-- independent_mouse.py
-- [DIR] parsec-vdd-cli
-- performance_monitor.py
-- README.md
-- requirements.txt
-- run_game_script.py
-- script_manager.py
-- [DIR] test_files
-- virtual_display.py
-
-### knowledge/
-- arknights.json
-- genshin.json
-- Girls_Creation_script.json
-- twinkle_starknightsX_script.json
-- ui_atlas_manager.py
-- [DIR] __pycache__
-
-### log/
-- agent_console.log
-- background_windows.log
-- independent_mouse.log
-- knowledge_manager.log
-- performance_monitor.log
-- script_manager.log
-- smart_agent.log
-- virtual_display.log
-
-### logs/
-- [DIR] ai_snapshots
-- game_agent.log
-
-### user_data/
-- config.json
-
-### venv/
-（子目录内容）
-
-### _archive/
-- [DIR] test_files
-
-### __pycache__/
-（子目录内容）
+## 版本信息
+- 当前版本: v3.1.0
+- 技术栈: Python 3.11 + Conda + LangChain + RapidOCR + Doubao-Pro
