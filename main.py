@@ -1,500 +1,368 @@
 # -*- coding: utf-8 -*-
-"""
-AI Agent 指挥中心
-基于 CustomTkinter 的现代化 UI 框架
-参考 Gemini_advice.txt 实现
-"""
-
 import customtkinter as ctk
 import threading
 import queue
 import time
-import win32gui
-import json
 import os
-from PIL import Image
-from datetime import datetime
+from PIL import Image, ImageTk
+import logging
 
-# 引入核心模块
+# 引入项目模块
+from game_window import GameWindow
 from smart_agent import SmartAgent
-from ai_brain import DoubaoBrain
-from config_manager import config_manager
+from knowledge_manager import KnowledgeBase
+from config_manager import ConfigManager
 
+# 设置外观模式
 ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")
+ctk.set_default_color_theme("dark-blue")
 
+class ModernLogCard(ctk.CTkFrame):
+    """
+    现代化的日志卡片，带有状态色条和折叠功能
+    """
+    COLORS = {
+        "thought": "#8e44ad",  # 紫色：AI思考
+        "vision":  "#2980b9",  # 蓝色：视觉感知
+        "action":  "#27ae60",  # 绿色：执行操作
+        "error":   "#c0392b",  # 红色：错误
+        "system":  "#7f8c8d"   # 灰色：系统消息
+    }
+    
+    ICONS = {
+        "thought": "🧠",
+        "vision":  "👁️",
+        "action":  "🖱️",
+        "error":   "❌",
+        "system":  "⚙️"
+    }
+
+    def __init__(self, master, text, detail="", type="system", timestamp=None, **kwargs):
+        super().__init__(master, fg_color="#2b2b2b", corner_radius=6, **kwargs)
+        
+        self.detail = detail
+        self.is_expanded = False
+        accent_color = self.COLORS.get(type, self.COLORS["system"])
+        icon = self.ICONS.get(type, "📝")
+        time_str = timestamp if timestamp else time.strftime("%H:%M:%S")
+
+        # 1. 左侧彩色状态条
+        self.bar = ctk.CTkFrame(self, width=4, fg_color=accent_color, corner_radius=0)
+        self.bar.pack(side="left", fill="y", padx=(0, 5))
+
+        # 2. 内容容器
+        self.content_box = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+
+        # 3. 标题行 (图标 + 时间 + 摘要)
+        self.header_frame = ctk.CTkFrame(self.content_box, fg_color="transparent")
+        self.header_frame.pack(fill="x")
+
+        self.info_label = ctk.CTkLabel(
+            self.header_frame, 
+            text=f"{icon} [{time_str}] {text}",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w",
+            text_color="#ecf0f1"
+        )
+        self.info_label.pack(side="left", fill="x", expand=True)
+
+        # 4. 展开/折叠按钮 (如果有详细信息)
+        if detail:
+            self.expand_btn = ctk.CTkButton(
+                self.header_frame, text="▼", width=20, height=20,
+                fg_color="transparent", text_color="#95a5a6",
+                command=self.toggle_expand
+            )
+            self.expand_btn.pack(side="right")
+            
+            # 详细信息区域 (默认隐藏)
+            self.detail_label = ctk.CTkTextbox(
+                self.content_box, height=0, fg_color="#1e1e1e", 
+                text_color="#bdc3c7", font=ctk.CTkFont(family="Consolas", size=11)
+            )
+            self.detail_label.insert("0.0", detail)
+            self.detail_label.configure(state="disabled")
+
+            # 绑定点击事件到整个头部
+            self.info_label.bind("<Button-1>", lambda e: self.toggle_expand())
+
+    def toggle_expand(self):
+        if not self.detail: return
+        self.is_expanded = not self.is_expanded
+        
+        if self.is_expanded:
+            self.expand_btn.configure(text="▲")
+            self.detail_label.pack(fill="x", pady=(5, 0))
+            self.detail_label.configure(height=100) # 展开高度
+        else:
+            self.expand_btn.configure(text="▼")
+            self.detail_label.pack_forget()
 
 class AICmdCenter(ctk.CTk):
+    """
+    AI 游戏代理指挥中心 - 主窗口
+    """
     def __init__(self):
         super().__init__()
         
-        # --- 窗口基础设置 ---
-        self.title("AI Agent 指挥中心 - Project Daigan")
+        # 1. 基础窗口设置
+        self.title("AI Game Agent - Command Center")
         self.geometry("1280x800")
+        self.minsize(1000, 700)
         
-        # --- 数据通信 ---
-        self.log_queue = queue.Queue()
-        self.image_queue = queue.Queue()
-        self.agent_running = False
+        # 初始化核心模块
+        self.config_manager = ConfigManager()
+        self.knowledge_base = KnowledgeBase()
+        self.ui_queue = queue.Queue()
+        self.agent = SmartAgent(ui_queue=self.ui_queue)
         
-        # --- 配置管理 ---
-        self.config = config_manager.get_config()
-        
-        # --- 布局初始化 ---
-        self.grid_columnconfigure(1, weight=1)
+        # 布局配置 (三栏布局: Sidebar, Viewport, ThoughtStream)
+        self.grid_columnconfigure(1, weight=3) # 中间视窗权重最大
+        self.grid_columnconfigure(2, weight=1) # 右侧日志权重适中
         self.grid_rowconfigure(0, weight=1)
-        
-        self.init_sidebar()
-        self.init_main_area()
-        
-        # --- 启动 UI 更新循环 ---
-        self.after(100, self.update_ui_loop)
-    
-    def save_config(self):
-        """保存配置文件"""
-        try:
-            if config_manager.save_config(self.config):
-                return True
-            return False
-        except:
-            return False
-    
-    def enum_windows(self):
-        """枚举所有可见窗口"""
-        windows = []
-        
-        def callback(hwnd, extra):
-            if win32gui.IsWindowVisible(hwnd):
-                title = win32gui.GetWindowText(hwnd)
-                if title:
-                    windows.append((hwnd, title))
-        
-        win32gui.EnumWindows(callback, None)
-        return windows
-    
-    def get_games(self):
-        """获取knowledge文件夹中的游戏列表"""
-        games = []
-        knowledge_dir = "knowledge"
-        if os.path.exists(knowledge_dir):
-            for file in os.listdir(knowledge_dir):
-                if file.endswith('.json'):
-                    game_name = file.replace('_script.json', '')
-                    games.append(game_name)
-        return games
 
-    def init_sidebar(self):
-        """左侧控制栏"""
+        # 构建三大区域
+        self.create_sidebar()
+        self.create_viewport()
+        self.create_thought_stream()
+        
+        # 启动UI更新循环
+        self.running = True
+        self.log_thread = threading.Thread(target=self.process_ui_queue, daemon=True)
+        self.log_thread.start()
+        
+        # 初始加载
+        self.refresh_game_list()
+
+    def create_sidebar(self):
+        """左侧控制栏：状态与控制"""
         self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
-        
-        # 标题
-        self.logo_label = ctk.CTkLabel(self.sidebar, text="🤖 AI COMMANDER", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.pack(padx=20, pady=(20, 10))
-        
-        # 状态指示
-        self.status_label = ctk.CTkLabel(self.sidebar, text="● IDLE", text_color="gray", font=("Consolas", 14))
-        self.status_label.pack(pady=5)
-        
-        # 调试模式开关
-        self.debug_mode = ctk.BooleanVar(value=False)
-        self.debug_switch = ctk.CTkSwitch(self.sidebar, text="🔧 调试模式", variable=self.debug_mode, font=("Consolas", 12))
-        self.debug_switch.pack(pady=10, padx=20, fill="x")
-        
-        # 模式指示灯
-        self.mode_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.mode_frame.pack(pady=5)
-        
-        ctk.CTkLabel(self.mode_frame, text="模式:", font=("Consolas", 12)).pack(side="left", padx=5)
-        self.mode_indicator = ctk.CTkLabel(self.mode_frame, text="● 等待中", text_color="gray", font=("Consolas", 12))
-        self.mode_indicator.pack(side="left")
-        
-        # 控制按钮
-        self.btn_start = ctk.CTkButton(self.sidebar, text="启动 Agent", fg_color="#2EA043", command=self.start_agent)
-        self.btn_start.pack(padx=20, pady=10)
-        
-        self.btn_stop = ctk.CTkButton(self.sidebar, text="紧急停止 (F12)", fg_color="#DA3633", command=self.stop_agent)
-        self.btn_stop.pack(padx=20, pady=10)
-        
-        # 模式切换
-        self.tab_view = ctk.CTkTabview(self.sidebar, height=400)
-        self.tab_view.pack(padx=10, pady=20, fill="x")
-        self.tab_view.add("监控")
-        self.tab_view.add("设置")
-        
-        # 监控Tab内的快捷指令和指令输入
-        self.btn_quick1 = ctk.CTkButton(self.tab_view.tab("监控"), text="测试截图", command=self.test_snapshot)
-        self.btn_quick1.pack(pady=5)
-        
-        # 指令输入
-        ctk.CTkLabel(self.tab_view.tab("监控"), text="执行指令:").pack(pady=(10, 5), anchor="w", padx=10)
-        self.instruction_var = ctk.StringVar(value="请分析当前界面并做出决策")
-        self.instruction_entry = ctk.CTkEntry(self.tab_view.tab("监控"), textvariable=self.instruction_var, width=180)
-        self.instruction_entry.pack(pady=5, padx=10)
-        
-        # 执行按钮
-        self.btn_execute = ctk.CTkButton(self.tab_view.tab("监控"), text="执行指令", command=self.execute_instruction)
-        self.btn_execute.pack(pady=5)
-        
-        # 开始循环按钮
-        self.btn_loop = ctk.CTkButton(self.tab_view.tab("监控"), text="开始循环", command=self.start_loop)
-        self.btn_loop.pack(pady=5)
-        
-        # 设置Tab内的配置项
-        settings_tab = self.tab_view.tab("设置")
-        
+        self.sidebar.grid_propagate(False) # 固定宽度
+
+        # Logo / 标题
+        ctk.CTkLabel(self.sidebar, text="🤖 AI AGENT", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(20, 10))
+        ctk.CTkLabel(self.sidebar, text="v1.0.0", text_color="gray").pack(pady=(0, 20))
+
         # 游戏选择
-        ctk.CTkLabel(settings_tab, text="游戏选择:").pack(pady=(10, 5), anchor="w", padx=10)
-        games = self.get_games()
-        self.game_var = ctk.StringVar(value=self.config.get("selected_game", ""))
-        self.game_combo = ctk.CTkComboBox(settings_tab, values=games, variable=self.game_var, width=180)
-        self.game_combo.pack(pady=5, padx=10)
-        
-        # 窗口选择
-        ctk.CTkLabel(settings_tab, text="目标窗口:").pack(pady=(10, 5), anchor="w", padx=10)
-        windows = self.enum_windows()
-        window_values = [f"{hwnd} - {title}" for hwnd, title in windows]
-        self.window_var = ctk.StringVar(value=self.config.get("selected_window", ""))
-        self.window_combo = ctk.CTkComboBox(settings_tab, values=window_values, variable=self.window_var, width=180)
-        self.window_combo.pack(pady=5, padx=10)
-        
-        # API Key
-        ctk.CTkLabel(settings_tab, text="API Key:").pack(pady=(10, 5), anchor="w", padx=10)
-        self.api_key_var = ctk.StringVar(value=self.config.get("api_key", ""))
-        self.api_key_entry = ctk.CTkEntry(settings_tab, textvariable=self.api_key_var, width=180)
-        self.api_key_entry.pack(pady=5, padx=10)
-        
-        # Endpoint ID
-        ctk.CTkLabel(settings_tab, text="Endpoint ID:").pack(pady=(10, 5), anchor="w", padx=10)
-        self.endpoint_var = ctk.StringVar(value=self.config.get("endpoint_id", ""))
-        self.endpoint_entry = ctk.CTkEntry(settings_tab, textvariable=self.endpoint_var, width=180)
-        self.endpoint_entry.pack(pady=5, padx=10)
-        
-        # 测试API连接按钮
-        self.btn_test_api = ctk.CTkButton(settings_tab, text="⚡ 测试连接", command=self.test_api_connection, width=180)
-        self.btn_test_api.pack(pady=10, padx=10)
-        
-        # 测试结果显示
-        self.api_test_result = ctk.CTkLabel(settings_tab, text="", font=("Consolas", 12))
-        self.api_test_result.pack(pady=5, padx=10)
-        
-        # 保存配置按钮
-        self.btn_save = ctk.CTkButton(settings_tab, text="保存配置", command=self.save_settings, width=180)
-        self.btn_save.pack(pady=15, padx=10)
-        
-        # 刷新窗口列表按钮
-        self.btn_refresh = ctk.CTkButton(settings_tab, text="刷新窗口列表", command=self.refresh_windows, width=180)
-        self.btn_refresh.pack(pady=5, padx=10)
+        ctk.CTkLabel(self.sidebar, text="目标游戏 (Target Game)", anchor="w").pack(fill="x", padx=20, pady=(10, 0))
+        self.game_selector = ctk.CTkOptionMenu(self.sidebar, dynamic_resizing=False, command=self.on_game_change)
+        self.game_selector.pack(fill="x", padx=20, pady=5)
 
-    def init_main_area(self):
-        """右侧主内容区"""
-        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-        self.main_frame.grid_columnconfigure(0, weight=3) # 画面占3份
-        self.main_frame.grid_columnconfigure(1, weight=2) # 日志占2份
-        self.main_frame.grid_rowconfigure(0, weight=1)
-        
-        # 1. 视觉预览区 (The Eye)
-        self.preview_frame = ctk.CTkFrame(self.main_frame)
-        self.preview_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        
-        self.preview_label = ctk.CTkLabel(self.preview_frame, text="等待视觉信号...", corner_radius=10)
-        self.preview_label.pack(expand=True, fill="both", padx=10, pady=10)
-        
-        # 2. 思维链日志区 (The Mind)
-        self.log_frame = ctk.CTkScrollableFrame(self.main_frame, label_text="思维链日志 (CoT)")
-        self.log_frame.grid(row=0, column=1, sticky="nsew")
+        # 状态指示
+        self.status_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        self.status_frame.pack(fill="x", padx=20, pady=20)
+        self.status_dot = ctk.CTkLabel(self.status_frame, text="●", text_color="red", font=("Arial", 24))
+        self.status_dot.pack(side="left")
+        self.status_text = ctk.CTkLabel(self.status_frame, text=" 已停止 (Stopped)", anchor="w")
+        self.status_text.pack(side="left", padx=10)
 
-    def add_log_card(self, text, type="info"):
-        """添加卡片式日志"""
-        # 检查是否需要显示debug日志
-        if (type == "DEBUG" or type == "RAW") and not self.debug_mode.get():
-            return
-        
-        colors = {
-            "thought": ("#1c2e4a", "#3b8ed0"), # 深蓝背景
-            "action":  ("#1e3a29", "#2cc985"), # 深绿背景
-            "error":   ("#4a1c1c", "#fa5a5a"), # 深红背景
-            "info":    ("gray20", "gray80"),
-            "DEBUG":   ("#2a2a2a", "#a0a0a0"), # 灰色背景
-            "RAW":     ("#2a2a2a", "#a0a0a0")  # 灰色背景
-        }
-        bg, fg = colors.get(type, colors["info"])
-        
-        card = ctk.CTkFrame(self.log_frame, fg_color=bg)
-        card.pack(fill="x", pady=2, padx=5)
-        
-        ts = datetime.now().strftime("%H:%M:%S")
-        
-        # 标题行
-        header = ctk.CTkLabel(card, text=f"[{ts}] {type.upper()}", text_color=fg, font=("Arial", 10, "bold"), anchor="w")
-        header.pack(fill="x", padx=5, pady=(5,0))
-        
-        # 内容行 - debug日志使用灰色等宽字体
-        if type in ["DEBUG", "RAW"]:
-            content = ctk.CTkLabel(card, text=text, text_color="#a0a0a0", font=("Consolas", 11), justify="left", anchor="w", wraplength=300)
-        else:
-            content = ctk.CTkLabel(card, text=text, text_color="white", font=("Consolas", 12), justify="left", anchor="w", wraplength=300)
-        content.pack(fill="x", padx=5, pady=(0,5))
-        
-        # 自动滚动到底部
-        self.log_frame._parent_canvas.yview_moveto(1.0)
+        # 核心控制按钮 (大按钮)
+        self.btn_start = ctk.CTkButton(
+            self.sidebar, text="▶ 启动代理 (START)", 
+            fg_color="#27ae60", hover_color="#2ecc71",
+            height=40, font=ctk.CTkFont(weight="bold"),
+            command=self.start_agent
+        )
+        self.btn_start.pack(fill="x", padx=20, pady=(10, 5))
 
-    def update_image_preview(self, pil_image):
-        """更新视觉预览，处理图片尺寸适配"""
-        # 计算缩放
-        w_box = self.preview_frame.winfo_width()
-        h_box = self.preview_frame.winfo_height()
-        
-        # 简单的保持比例缩放逻辑
-        ctk_img = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=(w_box-20, h_box-20))
-        self.preview_label.configure(image=ctk_img, text="")
+        self.btn_stop = ctk.CTkButton(
+            self.sidebar, text="⏹ 停止代理 (STOP)", 
+            fg_color="#c0392b", hover_color="#e74c3c",
+            height=40, font=ctk.CTkFont(weight="bold"),
+            state="disabled",
+            command=self.stop_agent
+        )
+        self.btn_stop.pack(fill="x", padx=20, pady=5)
 
-    def update_ui_loop(self):
-        """UI 主循环，处理队列消息"""
-        # 1. 处理日志
-        try:
-            while True:
-                msg = self.log_queue.get_nowait()
-                self.add_log_card(msg['text'], msg['type'])
-                
-                # 更新模式指示灯
-                text = msg.get('text', '')
-                if '快系统' in text:
-                    self.mode_indicator.configure(text="● 缓存模式", text_color="#2cc985")
-                elif '慢系统' in text:
-                    self.mode_indicator.configure(text="● 思考模式", text_color="#3b8ed0")
-                elif '异步写入缓存' in text or '缓存写入成功' in text:
-                    self.mode_indicator.configure(text="● 更新图谱", text_color="#f9ca24")
-        except queue.Empty:
-            pass
+        # 调试工具
+        ctk.CTkLabel(self.sidebar, text="调试工具", anchor="w").pack(fill="x", padx=20, pady=(30, 0))
+        self.debug_switch = ctk.CTkSwitch(self.sidebar, text="调试模式 (Debug Mode)", command=self.toggle_debug)
+        self.debug_switch.pack(fill="x", padx=20, pady=10)
         
-        # 2. 处理图像
-        try:
-            while True:
-                # 只取最新的一张图，丢弃旧的以防卡顿
-                img = self.image_queue.get_nowait()
-                if self.image_queue.empty():
-                    self.update_image_preview(img)
-        except queue.Empty:
-            pass
-            
-        self.after(100, self.update_ui_loop)
+        if self.config_manager.get("debug.enabled"):
+            self.debug_switch.select()
 
-    # --- 核心控制功能 ---
+        # 底部占位
+        ctk.CTkLabel(self.sidebar, text="System Ready", font=("Consolas", 10), text_color="gray").pack(side="bottom", pady=20)
+
+    def create_viewport(self):
+        """中间视窗：视觉感知区域"""
+        self.viewport = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=0)
+        self.viewport.grid(row=0, column=1, sticky="nsew", padx=2)
+        
+        # 顶部工具栏
+        self.view_tools = ctk.CTkFrame(self.viewport, height=40, fg_color="#2b2b2b")
+        self.view_tools.pack(fill="x", side="top")
+        
+        ctk.CTkLabel(self.view_tools, text=" 👁️ 视觉感知 (Visual Perception) ", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10)
+        
+        # 视图切换 (示例功能)
+        self.view_mode = ctk.CTkSegmentedButton(self.view_tools, values=["原始画面", "SoM网格", "UI匹配"], command=self.change_view_mode)
+        self.view_mode.set("原始画面")
+        self.view_mode.pack(side="right", padx=10, pady=5)
+
+        # 图片显示区域 (画布)
+        self.image_container = ctk.CTkFrame(self.viewport, fg_color="transparent")
+        self.image_container.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.preview_label = ctk.CTkLabel(self.image_container, text="等待画面输入...", text_color="gray")
+        self.preview_label.pack(fill="both", expand=True)
+
+    def create_thought_stream(self):
+        """右侧日志：思维流"""
+        self.thought_stream = ctk.CTkFrame(self, width=350, corner_radius=0)
+        self.thought_stream.grid(row=0, column=2, sticky="nsew")
+        self.thought_stream.grid_propagate(False)
+
+        # 标题
+        title_frame = ctk.CTkFrame(self.thought_stream, height=40, fg_color="#2b2b2b", corner_radius=0)
+        title_frame.pack(fill="x", side="top")
+        ctk.CTkLabel(title_frame, text="🧠 思维流 (Thought Stream)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10, pady=8)
+        
+        ctk.CTkButton(title_frame, text="清空", width=50, height=24, fg_color="#555", command=self.clear_logs).pack(side="right", padx=10)
+
+        # 滚动日志区
+        self.log_scroll = ctk.CTkScrollableFrame(self.thought_stream, fg_color="transparent")
+        self.log_scroll.pack(fill="both", expand=True, padx=5, pady=5)
+
+    # --- 逻辑功能区 ---
+
+    def refresh_game_list(self):
+        """加载游戏列表"""
+        games = self.knowledge_base.list_games()
+        if not games:
+            games = ["未找到游戏配置"]
+        self.game_selector.configure(values=games)
+        self.game_selector.set(games[0])
+
+    def on_game_change(self, choice):
+        self.add_log(f"切换目标游戏为: {choice}", type="system")
+        self.knowledge_base.load_game(choice)
+
     def start_agent(self):
-        self.status_label.configure(text="● RUNNING", text_color="#2cc985")
-        self.log_queue.put({"text": "Agent 启动初始化...", "type": "info"})
+        game_name = self.game_selector.get()
+        if not game_name or game_name == "未找到游戏配置":
+            self.add_log("请先选择有效的游戏配置", type="error")
+            return
+
+        self.add_log("正在启动智能代理...", type="system")
         
-        # 启动 agent_core 线程
-        def agent_thread():
-            try:
-                from smart_agent import SmartAgent
-                from ai_brain import DoubaoBrain
-                from knowledge_manager import KnowledgeBase
-                
-                # 获取选择的窗口
-                selected_window = self.window_var.get()
-                if selected_window:
-                    # 解析窗口句柄
-                    hwnd_str = selected_window.split(" - ")[0]
-                    hwnd = int(hwnd_str)
-                    self.log_queue.put({"text": f"正在连接窗口: {hwnd}", "type": "info"})
-                else:
-                    # 无窗口选择时的默认初始化
-                    self.log_queue.put({"text": "未选择窗口，使用默认初始化", "type": "info"})
-                    hwnd = None
-                
-                # 获取 API 配置
-                api_key = self.api_key_var.get()
-                endpoint_id = self.endpoint_var.get()
-                
-                # 初始化知识库
-                knowledge_base = KnowledgeBase()
-                selected_game = self.game_var.get()
-                if selected_game:
-                    load_success = knowledge_base.load_game(selected_game)
-                    if load_success:
-                        self.log_queue.put({"text": f"成功加载游戏知识库: {selected_game}", "type": "info"})
-                    else:
-                        self.log_queue.put({"text": f"加载游戏知识库失败: {selected_game}", "type": "warning"})
-                else:
-                    self.log_queue.put({"text": "未选择游戏，使用空知识库", "type": "info"})
-                
-                ai_brain = DoubaoBrain(api_key=api_key, endpoint_id=endpoint_id, ui_queue=self.log_queue)
-                
-                self.agent = SmartAgent(
-                    hwnd=hwnd,
-                    ai_brain=ai_brain,
-                    ui_queue=self.log_queue,
-                    img_queue=self.image_queue,
-                    knowledge_base=knowledge_base
-                )
-                
-                self.agent_running = True
-                self.log_queue.put({"text": "Agent 启动成功！", "type": "info"})
-                
-            except Exception as e:
-                self.log_queue.put({"text": f"Agent 启动失败: {str(e)}", "type": "error"})
-                self.status_label.configure(text="● ERROR", text_color="#fa5a5a")
+        # 尝试启动
+        # 注意：这里需要根据实际情况获取窗口标题，暂用配置或游戏名
+        window_title = self.config_manager.get("game.window_title", game_name)
         
-        threading.Thread(target=agent_thread, daemon=True).start()
+        if self.agent.start(window_title):
+            self.status_dot.configure(text_color="#2ecc71") # Green
+            self.status_text.configure(text=" 运行中 (Running)")
+            self.btn_start.configure(state="disabled")
+            self.btn_stop.configure(state="normal")
+            self.add_log(f"代理已连接到窗口: {window_title}", type="system")
+        else:
+            self.add_log(f"无法连接到游戏窗口: {window_title}", type="error")
 
     def stop_agent(self):
-        self.status_label.configure(text="● STOPPED", text_color="#fa5a5a")
-        self.log_queue.put({"text": "用户触发紧急停止", "type": "error"})
-        
-        if hasattr(self, 'agent'):
-            self.agent_running = False
-            # 清理 agent 资源
-            del self.agent
+        self.agent.stop()
+        self.status_dot.configure(text_color="red")
+        self.status_text.configure(text=" 已停止 (Stopped)")
+        self.btn_start.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
+        self.add_log("代理已停止", type="system")
 
-    def test_snapshot(self):
-        """测试用：获取真实屏幕截图"""
-        self.log_queue.put({"text": "正在获取屏幕截图...", "type": "thought"})
-        
-        # 获取选中的窗口
-        selected_window = self.window_var.get()
-        if not selected_window:
-            self.log_queue.put({"text": "未选择窗口，请先选择目标窗口", "type": "error"})
-            return
-        
+    def toggle_debug(self):
+        state = self.debug_switch.get()
+        self.config_manager.set("debug.enabled", bool(state))
+        self.add_log(f"调试模式: {'开启' if state else '关闭'}", type="system")
+
+    def change_view_mode(self, value):
+        # 这里需要连接到 agent 的视觉模块来改变输出图像类型
+        # 目前仅做日志演示
+        self.add_log(f"切换视觉模式: {value}", type="system")
+
+    def update_preview(self, img_array):
+        """更新中间视窗的截图"""
         try:
-            # 解析窗口句柄
-            hwnd_str = selected_window.split(" - ")[0]
-            hwnd = int(hwnd_str)
+            # 简单缩放适应显示
+            img = Image.fromarray(img_array)
             
-            # 实例化GameWindow
-            from game_window import GameWindow
-            window = GameWindow()
-            window.init_hwnd(hwnd)
+            # 获取当前显示区域大小
+            display_w = self.image_container.winfo_width()
+            display_h = self.image_container.winfo_height()
             
-            # 获取真实截图
-            img = window.snapshot()
-            if img:
-                self.log_queue.put({"text": "成功获取屏幕截图", "type": "action"})
-                self.image_queue.put(img)
-            else:
-                self.log_queue.put({"text": "截图失败，请检查窗口是否正常", "type": "error"})
-        except Exception as e:
-            self.log_queue.put({"text": f"截图异常: {str(e)}", "type": "error"})
-    
-    def save_settings(self):
-        """保存设置"""
-        self.config["selected_game"] = self.game_var.get()
-        self.config["selected_window"] = self.window_var.get()
-        self.config["api_key"] = self.api_key_var.get()
-        self.config["endpoint_id"] = self.endpoint_var.get()
-        
-        if self.save_config():
-            self.log_queue.put({"text": "配置保存成功", "type": "info"})
-        else:
-            self.log_queue.put({"text": "配置保存失败", "type": "error"})
-    
-    def refresh_windows(self):
-        """刷新窗口列表"""
-        windows = self.enum_windows()
-        window_values = [f"{hwnd} - {title}" for hwnd, title in windows]
-        self.window_combo.configure(values=window_values)
-        self.log_queue.put({"text": "窗口列表已刷新", "type": "info"})
-    
-    def test_api_connection(self):
-        """测试API连接"""
-        # 获取API配置
-        api_key = self.api_key_var.get()
-        endpoint_id = self.endpoint_var.get()
-        
-        if not api_key or not endpoint_id:
-            self.api_test_result.configure(text="❌ 请先填写API Key和Endpoint ID", text_color="#fa5a5a")
-            return
-        
-        # 禁用按钮并显示测试中
-        self.btn_test_api.configure(text="Testing...", state="disabled")
-        self.api_test_result.configure(text="测试中...", text_color="#f9ca24")
-        
-        # 在单独线程中执行测试
-        def test_thread():
-            try:
-                from ai_brain import DoubaoBrain
-                brain = DoubaoBrain(api_key=api_key, endpoint_id=endpoint_id, ui_queue=self.log_queue)
-                is_success, latency_ms, message = brain.test_connection_speed()
-                
-                # 更新UI
-                if is_success:
-                    self.api_test_result.configure(text=f"✅ 成功 {latency_ms}ms", text_color="#2cc985")
-                    self.log_queue.put({"text": f"API连接测试成功，延迟: {latency_ms}ms", "type": "info"})
-                else:
-                    self.api_test_result.configure(text=f"❌ 失败: {message}", text_color="#fa5a5a")
-                    self.log_queue.put({"text": f"API连接测试失败: {message}", "type": "error"})
-            except Exception as e:
-                self.api_test_result.configure(text=f"❌ 异常: {str(e)}", text_color="#fa5a5a")
-                self.log_queue.put({"text": f"API测试异常: {str(e)}", "type": "error"})
-            finally:
-                # 恢复按钮状态
-                self.btn_test_api.configure(text="⚡ 测试连接", state="normal")
-        
-        threading.Thread(target=test_thread, daemon=True).start()
-    
-    def execute_instruction(self):
-        """执行单次指令"""
-        if not hasattr(self, 'agent'):
-            self.log_queue.put({"text": "Agent 未初始化，请先启动", "type": "error"})
-            return
-        
-        instruction = self.instruction_var.get()
-        if not instruction:
-            self.log_queue.put({"text": "请输入执行指令", "type": "error"})
-            return
-        
-        self.log_queue.put({"text": f"执行指令: {instruction}", "type": "info"})
-        
-        # 在单独线程中执行，避免阻塞UI
-        def execute_thread():
-            try:
-                result = self.agent.step(instruction)
-                if result:
-                    if result.get("success"):
-                        self.log_queue.put({"text": f"执行成功: {result.get('message', '')}", "type": "info"})
-                    else:
-                        self.log_queue.put({"text": f"执行失败: {result.get('message', '')}", "type": "error"})
-                else:
-                    self.log_queue.put({"text": "执行无结果", "type": "error"})
-            except Exception as e:
-                self.log_queue.put({"text": f"执行异常: {str(e)}", "type": "error"})
-        
-        threading.Thread(target=execute_thread, daemon=True).start()
-    
-    def start_loop(self):
-        """开始循环执行指令"""
-        if not hasattr(self, 'agent'):
-            self.log_queue.put({"text": "Agent 未初始化，请先启动", "type": "error"})
-            return
-        
-        instruction = self.instruction_var.get()
-        if not instruction:
-            self.log_queue.put({"text": "请输入执行指令", "type": "error"})
-            return
-        
-        self.log_queue.put({"text": f"开始循环执行指令: {instruction}", "type": "info"})
-        
-        # 在单独线程中执行，避免阻塞UI
-        def loop_thread():
-            try:
-                result = self.agent.run_loop(instruction)
-                if result:
-                    self.log_queue.put({"text": "循环执行完成", "type": "info"})
-                else:
-                    self.log_queue.put({"text": "循环执行失败", "type": "error"})
-            except Exception as e:
-                self.log_queue.put({"text": f"循环执行异常: {str(e)}", "type": "error"})
-        
-        threading.Thread(target=loop_thread, daemon=True).start()
+            if display_w < 10 or display_h < 10: return
 
+            # 保持比例缩放
+            img_ratio = img.width / img.height
+            display_ratio = display_w / display_h
+
+            if img_ratio > display_ratio:
+                new_w = display_w
+                new_h = int(display_w / img_ratio)
+            else:
+                new_h = display_h
+                new_w = int(display_h * img_ratio)
+
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            ctk_img = ImageTk.PhotoImage(img)
+
+            self.preview_label.configure(image=ctk_img, text="")
+            self.preview_label.image = ctk_img
+        except Exception as e:
+            print(f"Preview Error: {e}")
+
+    # --- 日志系统 ---
+
+    def process_ui_queue(self):
+        """处理来自 Agent 的消息"""
+        while self.running:
+            try:
+                msg = self.ui_queue.get(timeout=0.1)
+                
+                # 如果消息包含图像数据，更新预览
+                if "image" in msg:
+                    self.master.after(0, self.update_preview, msg["image"])
+                
+                # 添加日志卡片
+                self.master.after(0, self._add_log_card_safe, msg)
+                
+                self.ui_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Queue Error: {e}")
+
+    def _add_log_card_safe(self, msg):
+        """在主线程中安全添加日志卡片"""
+        try:
+            card = ModernLogCard(
+                self.log_scroll, 
+                text=msg.get("text", ""), 
+                detail=msg.get("detail", ""), 
+                type=msg.get("type", "system")
+            )
+            card.pack(fill="x", pady=2)
+            
+            # 自动滚动到底部
+            self.master.update_idletasks() # 强制刷新计算高度
+            self.log_scroll._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def add_log(self, text, detail="", type="system"):
+        """手动添加日志的快捷方法"""
+        self.ui_queue.put({"text": text, "detail": detail, "type": type})
+
+    def clear_logs(self):
+        for widget in self.log_scroll.winfo_children():
+            widget.destroy()
+
+    def on_closing(self):
+        self.running = False
+        self.stop_agent()
+        self.destroy()
 
 if __name__ == "__main__":
-    # 初始化 config_manager
-    config_manager
-    
-    # 启动应用
     app = AICmdCenter()
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()

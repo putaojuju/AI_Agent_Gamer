@@ -1,0 +1,94 @@
+# Game_script 项目文件树
+
+## 根目录文件
+- .gitignore
+- ai_brain.py
+- config_manager.py
+- env_check.py
+- game_window.py
+- knowledge_manager.py
+- log_formatter.py
+- main.py
+- mouse_controller.py
+- ocr_tool.py
+- performance_monitor.py
+- README.md
+- requirements.txt
+- screenshot_config.json
+- screenshot_history.json
+- screenshot_tool.py
+- smart_agent.py
+- test_ui.py
+- vision_core.py
+- 主程序.bat
+- 使用Conda环境运行.bat
+- 启动截图工具.bat
+- 启动管理器.bat
+- 项目文件树.txt
+
+## 子目录结构
+
+### .trae/
+- [DIR] documents
+- [DIR] rules
+
+### docs/
+- PYTHON_VERSION_MANAGEMENT.md
+- virtual_screen_documentation.md
+
+### games/
+- [DIR] .git
+- [DIR] .trae
+- [DIR] Girls_Creation_script
+- README.md
+- [DIR] twinkle_starknightsX_script
+
+### Game_Script_public/
+- [DIR] .git
+- .gitignore
+- background_windows.py
+- control_panel.py
+- game_window_manager.py
+- independent_mouse.py
+- [DIR] parsec-vdd-cli
+- performance_monitor.py
+- README.md
+- requirements.txt
+- run_game_script.py
+- script_manager.py
+- [DIR] test_files
+- virtual_display.py
+
+### knowledge/
+- arknights.json
+- genshin.json
+- Girls_Creation_script.json
+- twinkle_starknightsX_script.json
+- ui_atlas_manager.py
+- [DIR] __pycache__
+
+### log/
+- agent_console.log
+- background_windows.log
+- independent_mouse.log
+- knowledge_manager.log
+- performance_monitor.log
+- script_manager.log
+- smart_agent.log
+- virtual_display.log
+
+### logs/
+- [DIR] ai_snapshots
+- game_agent.log
+
+### user_data/
+- config.json
+
+### venv/
+（子目录内容）
+
+### _archive/
+- [DIR] test_files
+
+### __pycache__/
+（子目录内容）
