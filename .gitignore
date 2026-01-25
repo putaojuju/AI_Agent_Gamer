@@ -64,7 +64,17 @@ pytest_cache/
 coverage.xml
 
 # 私有仓库内容（不提交到公开仓库）
-games/
+# === 核心隐私隔离规则 ===
+# 排除所有用户数据
+user_data/*
+# 但是保留 user_data 目录本身
+!user_data/.gitkeep
+
+# 排除具体游戏脚本
+games/*
+!games/.gitkeep
+
+# 排除私有配置
 .trae/
 
 # 临时文件夹
