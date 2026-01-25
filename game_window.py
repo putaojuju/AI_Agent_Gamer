@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
+# DPI 感知设置
+import ctypes
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    ctypes.windll.user32.SetProcessDPIAware()
+
 import win32gui
 import win32ui
 import win32con
 import numpy as np
 import logging
+import ctypes
 
 class GameWindow:
     def __init__(self):
@@ -101,7 +109,7 @@ class GameWindow:
             # 参数 1: (某些系统版本不同)
             # 参数 2: PrintClient (仅内容区，容易黑屏)
             # 这里的 0 通常对模拟器兼容性最好
-            result = win32gui.PrintWindow(self.hwnd, memdc.GetSafeHdc(), 0) 
+            result = ctypes.windll.user32.PrintWindow(self.hwnd, memdc.GetSafeHdc(), 0) 
             
             bmp_info = bmp.GetInfo()
             bmp_str = bmp.GetBitmapBits(True)

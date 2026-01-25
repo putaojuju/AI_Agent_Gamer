@@ -11,6 +11,7 @@ import win32gui
 import win32con
 import win32ui
 import mss
+import ctypes
 from PIL import Image, ImageDraw, ImageFont
 from typing import Optional, Tuple, Dict, List
 import logging
@@ -189,9 +190,9 @@ class VisionCore:
             saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
             saveDC.SelectObject(saveBitMap)
             
-            result = win32gui.PrintWindow(self.hwnd, saveDC.GetSafeHdc(), 2)
+            result = ctypes.windll.user32.PrintWindow(self.hwnd, saveDC.GetSafeHdc(), 2)
             if result == 0:
-                result = win32gui.PrintWindow(self.hwnd, saveDC.GetSafeHdc(), 0)
+                result = ctypes.windll.user32.PrintWindow(self.hwnd, saveDC.GetSafeHdc(), 0)
             
             if result == 0:
                 logger.error("PrintWindow API 调用失败")
@@ -237,12 +238,12 @@ class VisionCore:
             logger.error(f"屏幕截图失败: {e}")
             return None
     
-    def get_annotated_screenshot(self, use_grid: bool = True) -> Optional[Tuple[str, Image.Image, Dict]]:
+    def get_annotated_screenshot(self, use_grid: bool = False) -> Optional[Tuple[str, Image.Image, Dict]]:
         """
         获取标注后的截图
         
         Args:
-            use_grid: 是否添加网格标注，默认 True
+            use_grid: 是否添加网格标注，默认 False
         
         Returns:
             (Base64图片, 原始PIL图片, 网格映射信息)，失败返回 None

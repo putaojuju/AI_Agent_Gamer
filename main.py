@@ -406,18 +406,34 @@ class AICmdCenter(ctk.CTk):
 
     def update_preview(self, img_array):
         try:
+            # 将 numpy 数组转换为 PIL Image
             img = Image.fromarray(img_array)
+            
+            # 获取容器尺寸
             display_w = self.image_container.winfo_width()
             display_h = self.image_container.winfo_height()
-            if display_w < 10: return
             
-            ratio = min(display_w/img.width, display_h/img.height)
-            new_size = (int(img.width*ratio), int(img.height*ratio))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
-            ctk_img = ImageTk.PhotoImage(img)
+            # 防止窗口最小化或未渲染时除以零错误
+            if display_w < 10 or display_h < 10: 
+                return
+            
+            # 计算缩放比例
+            ratio = min(display_w / img.width, display_h / img.height)
+            new_size = (int(img.width * ratio), int(img.height * ratio))
+            
+            # --- FIX START: 使用 CTkImage 替代 ImageTk.PhotoImage ---
+            ctk_img = ctk.CTkImage(
+                light_image=img,
+                dark_image=img,
+                size=new_size
+            )
+            # --- FIX END ---
+            
             self.preview_label.configure(image=ctk_img, text="")
-            self.preview_label.image = ctk_img
-        except Exception as e: print(f"Preview Error: {e}")
+            self.preview_label.image = ctk_img # 保持引用防止被垃圾回收
+            
+        except Exception as e: 
+            print(f"Preview Error: {e}")
 
     def process_ui_queue(self):
         while self.running:
