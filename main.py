@@ -91,16 +91,16 @@ class SettingsDialog(ctk.CTkToplevel):
 
 class CoTLogCard(ctk.CTkFrame):
     """
-    思维链日志卡片 (Chain of Thought Log Card)
-    支持：日期时间 + 小标题 + 折叠的详细 DEBUG 信息
+    思维链日志卡片 (Chain of Thought Log Card) - V2.0 交互增强版
+    特性：全标题点击展开、深色详情背景、紧凑布局
     """
     COLORS = {
-        "THOUGHT": "#9b59b6", # 紫色 - 思考
-        "VISION": "#3498db",  # 蓝色 - 视觉
-        "ACTION": "#2ecc71",  # 绿色 - 执行
-        "SYSTEM": "#95a5a6",  # 灰色 - 系统
-        "ERROR": "#e74c3c",   # 红色 - 错误
-        "WARNING": "#f39c12"  # 橙色 - 警告
+        "THOUGHT": "#9b59b6", # 紫色
+        "VISION": "#3498db",  # 蓝色
+        "ACTION": "#2ecc71",  # 绿色
+        "SYSTEM": "#95a5a6",  # 灰色
+        "ERROR": "#e74c3c",   # 红色
+        "WARNING": "#f39c12"  # 橙色
     }
     ICONS = {
         "THOUGHT": "🧠", "VISION": "👁️", "ACTION": "🖱️", 
@@ -108,39 +108,32 @@ class CoTLogCard(ctk.CTkFrame):
     }
 
     def __init__(self, master, log_data: dict, **kwargs):
+        # 初始化 Frame，默认背景色即为标题栏颜色
         super().__init__(master, fg_color="#2b2b2b", corner_radius=6, **kwargs)
         
-        # 1. 数据解析
+        # --- 1. 数据解析 ---
         raw_type = log_data.get("type", "SYSTEM")
         self.type = raw_type.upper() if raw_type else "SYSTEM"
-        self.title = log_data.get("title", log_data.get("text", "Info")) # 兼容旧字段 text
+        self.title = log_data.get("title", log_data.get("text", "Info"))
         self.detail = log_data.get("detail", "")
         
-        # 时间戳处理 (格式: MM-DD HH:MM:SS)
         ts = log_data.get("time", time.time())
-        self.timestamp = time.strftime("%m-%d %H:%M:%S", time.localtime(ts))
+        self.timestamp = time.strftime("%H:%M:%S", time.localtime(ts))
         
         self.is_expanded = False
         self.accent_color = self.COLORS.get(self.type, "#95a5a6")
         self.icon = self.ICONS.get(self.type, "📝")
 
-        # 2. 布局结构
-        # 左侧彩色条 (指示类型)
-        self.bar = ctk.CTkFrame(self, width=4, fg_color=self.accent_color, corner_radius=0)
-        self.bar.pack(side="left", fill="y", padx=(0, 5))
-
-        # 内容容器
-        self.content_box = ctk.CTkFrame(self, fg_color="transparent")
-        self.content_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-
-        # === 头部区域 (常驻显示) ===
-        self.header_frame = ctk.CTkFrame(self.content_box, fg_color="transparent")
-        self.header_frame.pack(fill="x")
+        # --- 2. 标题栏区域 (Header) ---
+        # 创建一个内部 Frame 作为标题栏，方便绑定点击事件
+        self.header_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=6)
+        self.header_frame.pack(fill="x", ipadx=5, ipady=5) # ipad 增加内部点击区域，但不增加视觉高度
         
-        # 绑定点击事件到头部，实现点击任意位置折叠/展开
-        self.header_frame.bind("<Button-1>", self.toggle_expand)
-        
-        # 时间戳 Label
+        # 左侧彩色指示条
+        self.bar = ctk.CTkFrame(self.header_frame, width=4, height=20, fg_color=self.accent_color)
+        self.bar.pack(side="left", padx=(5, 5))
+
+        # 时间戳
         self.time_label = ctk.CTkLabel(
             self.header_frame, 
             text=f"[{self.timestamp}]", 
@@ -148,9 +141,8 @@ class CoTLogCard(ctk.CTkFrame):
             font=ctk.CTkFont(family="Consolas", size=10)
         )
         self.time_label.pack(side="left", padx=(0, 5))
-        self.time_label.bind("<Button-1>", self.toggle_expand)
 
-        # 标题 Label
+        # 标题文本
         title_text = f"{self.icon} {self.title}"
         self.info_label = ctk.CTkLabel(
             self.header_frame, 
@@ -160,53 +152,75 @@ class CoTLogCard(ctk.CTkFrame):
             text_color="#ecf0f1"
         )
         self.info_label.pack(side="left", fill="x", expand=True)
-        self.info_label.bind("<Button-1>", self.toggle_expand)
 
-        # 折叠指示器 (如果有详细信息才显示)
+        # 展开/折叠 指示图标
         if self.detail:
-            self.indicator = ctk.CTkLabel(
+            self.arrow_label = ctk.CTkLabel(
                 self.header_frame, 
-                text="▶", # 默认折叠状态
+                text="▶", # 初始向右
                 width=20, 
                 text_color="#7f8c8d", 
                 font=ctk.CTkFont(size=10)
             )
-            self.indicator.pack(side="right")
-            self.indicator.bind("<Button-1>", self.toggle_expand)
+            self.arrow_label.pack(side="right", padx=5)
+
+        # --- 3. 详情区域 (Detail) - 初始隐藏 ---
+        if self.detail:
+            # 详情容器：背景更深
+            self.detail_frame = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=0)
             
-            # === 详细区域 (默认隐藏) ===
-            # 使用 Textbox 显示大量文本/JSON，支持复制
+            # 详情文本框
             self.detail_text = ctk.CTkTextbox(
-                self.content_box, 
-                height=0, 
-                fg_color="#1e1e1e", 
-                text_color="#bdc3c7", 
+                self.detail_frame,
+                fg_color="transparent", # 透明背景，透出 Frame 的深色
+                text_color="#bdc3c7",
                 font=ctk.CTkFont(family="Consolas", size=11),
-                activate_scrollbars=False
+                activate_scrollbars=False,
+                height=0 # 初始高度
             )
             self.detail_text.insert("0.0", str(self.detail))
-            self.detail_text.configure(state="disabled") # 只读模式
+            self.detail_text.configure(state="disabled") # 只读
+            self.detail_text.pack(fill="x", padx=10, pady=5)
+
+            # --- 4. 关键：全区域点击绑定 ---
+            # 绑定 Header 及其所有子控件，确保点击任何位置都能触发
+            self._bind_click_event(self.header_frame)
+
+    def _bind_click_event(self, widget):
+        """递归绑定点击事件"""
+        widget.bind("<Button-1>", self.toggle_expand)
+        for child in widget.winfo_children():
+            self._bind_click_event(child)
 
     def toggle_expand(self, event=None):
-        """切换折叠状态"""
+        """切换展开/折叠状态"""
         if not self.detail: return
         
         self.is_expanded = not self.is_expanded
         
         if self.is_expanded:
-            self.indicator.configure(text="▼") # 展开箭头
-            self.detail_text.pack(fill="x", pady=(5, 0))
+            # 1. 改变箭头方向
+            self.arrow_label.configure(text="▼")
+            # 2. 改变标题栏背景（可选，增加反馈感）
+            self.configure(fg_color="#353535") 
             
-            # 动态计算高度 (根据行数，最多显示15行，之后滚动)
+            # 3. 显示详情区
+            self.detail_frame.pack(fill="x", padx=2, pady=(0, 2))
+            
+            # 4. 动态计算高度
             line_count = int(self.detail_text.index('end-1c').split('.')[0])
-            new_height = min(300, max(60, line_count * 18))
-            
+            # 估算高度：行数 * 行高 + 缓冲
+            new_height = min(400, max(40, line_count * 18))
             self.detail_text.configure(height=new_height, activate_scrollbars=True)
+            
         else:
-            self.indicator.configure(text="▶") # 折叠箭头
-            self.detail_text.pack_forget()
-            self.detail_text.configure(height=0)
-
+            # 1. 恢复箭头
+            self.arrow_label.configure(text="▶")
+            # 2. 恢复标题栏背景
+            self.configure(fg_color="#2b2b2b")
+            
+            # 3. 隐藏详情区
+            self.detail_frame.pack_forget()
 class ThoughtStreamPanel(ctk.CTkFrame):
     """日志流管理面板"""
     def __init__(self, master, **kwargs):
