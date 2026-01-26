@@ -13,6 +13,7 @@ from smart_agent import SmartAgent
 from knowledge_manager import KnowledgeBase
 from config_manager import ConfigManager
 from ai_brain import AIBrain
+from logger_setup import logger, write_log
 
 # 设置外观模式
 ctk.set_appearance_mode("Dark")
@@ -500,6 +501,8 @@ class AICmdCenter(ctk.CTk):
                         pass
                 try:
                     self.after(0, lambda: self.thought_panel.add_log(msg))
+                    # 同时写入日志文件
+                    write_log(msg)
                 except Exception:
                     pass
                 self.ui_queue.task_done()
@@ -524,6 +527,8 @@ class AICmdCenter(ctk.CTk):
     def on_closing(self):
         self.running = False
         self.stop_agent()
+        # 关闭日志文件
+        logger.close()
         self.destroy()
 
 if __name__ == "__main__":

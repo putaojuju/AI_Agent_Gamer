@@ -70,7 +70,7 @@ class SmartAgent:
             
         except Exception as e:
             if self.ui_queue:
-                self.ui_queue.put({"title": f"坐标转换错误: {e}", "type": "ERROR"})
+                self.ui_queue.put({"title": f"坐标转换错误: {e}", "type": "ERROR", "detail": str(e)})
             return 0, 0
     
     def start(self, window_title: Optional[str] = None):
@@ -79,13 +79,13 @@ class SmartAgent:
             success = self.game_window.init_hwnd(window_title)
             if not success:
                 if self.ui_queue:
-                    self.ui_queue.put({"title": f"无法找到游戏窗口: {window_title}", "type": "ERROR"})
+                    self.ui_queue.put({"title": f"无法找到游戏窗口: {window_title}", "type": "ERROR", "detail": f"窗口标题: {window_title}"})
                 return False
         else:
             # 如果window_title为None，信任现有的self.game_window.hwnd
             if not self.game_window.hwnd:
                 if self.ui_queue:
-                    self.ui_queue.put({"title": "游戏窗口未初始化，请先连接窗口", "type": "ERROR"})
+                    self.ui_queue.put({"title": "游戏窗口未初始化，请先连接窗口", "type": "ERROR", "detail": "hwnd 为空，请在左侧面板中选择并连接游戏窗口"})
                 return False
         
         self.running = True
@@ -94,9 +94,9 @@ class SmartAgent:
         
         if self.ui_queue:
             if window_title:
-                self.ui_queue.put({"title": f"智能代理已启动，正在监控游戏窗口: {window_title}", "type": "SYSTEM"})
+                self.ui_queue.put({"title": f"智能代理已启动，正在监控游戏窗口: {window_title}", "type": "SYSTEM", "detail": f"窗口标题: {window_title}"})
             else:
-                self.ui_queue.put({"title": "智能代理已启动，正在监控已连接的游戏窗口", "type": "SYSTEM"})
+                self.ui_queue.put({"title": "智能代理已启动，正在监控已连接的游戏窗口", "type": "SYSTEM", "detail": f"窗口句柄: {self.game_window.hwnd}"})
         
         return True
     
@@ -107,7 +107,7 @@ class SmartAgent:
             self.agent_thread.join(timeout=2)
         
         if self.ui_queue:
-            self.ui_queue.put({"title": "智能代理已停止", "type": "SYSTEM"})
+            self.ui_queue.put({"title": "智能代理已停止", "type": "SYSTEM", "detail": "代理线程已终止"})
     
     def run(self):
         """代理主循环"""
@@ -117,7 +117,7 @@ class SmartAgent:
                 screenshot = self.game_window.snapshot()
                 if screenshot is None:
                     if self.ui_queue:
-                        self.ui_queue.put({"title": "无法获取游戏窗口截图", "type": "WARNING"})
+                        self.ui_queue.put({"title": "无法获取游戏窗口截图", "type": "WARNING", "detail": "可能是窗口最小化或权限不足"})
                     continue
                 
                 # 分析游戏状态
@@ -144,7 +144,7 @@ class SmartAgent:
         image_base64 = self._image_to_base64(image_data)
         if not image_base64:
             if self.ui_queue:
-                self.ui_queue.put({"title": "无法转换图像为base64", "type": "ERROR"})
+                    self.ui_queue.put({"title": "无法转换图像为base64", "type": "ERROR", "detail": "图像数据无效或转换失败"})
             return {
                 "ai_analysis": {"success": False, "error": "图像转换失败"},
                 "ocr_results": [],
@@ -181,7 +181,7 @@ class SmartAgent:
                     "detail": f"完整思考:\n{thought}\n\n原始数据:\n{formatted_data}"
                 })
                 if reason:
-                    self.ui_queue.put({"title": f"AI理由: {reason}", "type": "SYSTEM"})
+                    self.ui_queue.put({"title": f"AI理由: {reason}", "type": "SYSTEM", "detail": reason})
                 
             # 执行动作 (Seed 1.8 优先模式)
             if action_type == "click" and target_norm:
@@ -208,12 +208,12 @@ class SmartAgent:
                 
             elif action_type == "wait":
                 if self.ui_queue:
-                    self.ui_queue.put({"title": "AI建议等待...", "type": "SYSTEM"})
+                    self.ui_queue.put({"title": "AI建议等待...", "type": "SYSTEM", "detail": "画面可能在加载中或需要等待状态变化"})
                 
             else:
                 # [混合双打逻辑] 如果 AI 没给出坐标，尝试 OCR 兜底
                 if self.ui_queue:
-                    self.ui_queue.put({"title": "未获取视觉坐标，尝试 OCR 兜底...", "type": "WARNING"})
+                    self.ui_queue.put({"title": "未获取视觉坐标，尝试 OCR 兜底...", "type": "WARNING", "detail": "AI 未返回坐标信息，将尝试通过 OCR 识别关键词"})
                 
                 # OCR 补救: 从思考或理由中提取关键词
                 ocr_targets = []
@@ -229,7 +229,7 @@ class SmartAgent:
                 # 尝试OCR识别
                 if ocr_targets:
                     if self.ui_queue:
-                        self.ui_queue.put({"title": f"OCR识别目标: {ocr_targets}", "type": "SYSTEM"})
+                        self.ui_queue.put({"title": f"OCR识别目标: {ocr_targets}", "type": "SYSTEM", "detail": f"识别目标列表: {ocr_targets}"})
                     
                     # 创建视觉核心实例
                     vision = VisionCore(hwnd=self.game_window.hwnd)
@@ -240,7 +240,7 @@ class SmartAgent:
                         if ocr_result:
                             x, y, conf = ocr_result
                             if self.ui_queue:
-                                self.ui_queue.put({"title": f"OCR识别成功: '{target_text}' at ({x}, {y}), 置信度: {conf:.2f}", "type": "VISION"})
+                                self.ui_queue.put({"title": f"OCR识别成功: '{target_text}' at ({x}, {y}), 置信度: {conf:.2f}", "type": "VISION", "detail": f"目标文本: '{target_text}'\n坐标: ({x}, {y})\n置信度: {conf:.2f}"})
                             # 更新结果
                             result["action_type"] = "click"
                             result["target"] = [x, y]
@@ -260,7 +260,7 @@ class SmartAgent:
         """执行操作"""
         if not self.game_window.hwnd:
             if self.ui_queue:
-                self.ui_queue.put({"title": "游戏窗口未连接", "type": "ERROR"})
+                self.ui_queue.put({"title": "游戏窗口未连接", "type": "ERROR", "detail": "hwnd 为空，无法执行操作"})
             return False
         
         try:
@@ -276,10 +276,10 @@ class SmartAgent:
                 success = False
             
             if self.ui_queue:
-                if success:
-                    self.ui_queue.put({"title": f"执行操作成功: {action} at ({x}, {y})", "type": "ACTION"})
-                else:
-                    self.ui_queue.put({"title": f"执行操作失败: {action} at ({x}, {y})", "type": "ERROR"})
+                    if success:
+                        self.ui_queue.put({"title": f"执行操作成功: {action} at ({x}, {y})", "type": "ACTION", "detail": f"操作类型: {action}\n坐标: ({x}, {y})"})
+                    else:
+                        self.ui_queue.put({"title": f"执行操作失败: {action} at ({x}, {y})", "type": "ERROR", "detail": f"操作类型: {action}\n坐标: ({x}, {y})"})
             
             return success
         except Exception as e:
