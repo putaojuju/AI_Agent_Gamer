@@ -6,6 +6,19 @@ import time
 import os
 import json
 from PIL import Image, ImageTk
+import ctypes
+
+# --- DPI 感知修复 ---
+try:
+    # Windows 8.1 及以上
+    ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
+except Exception:
+    try:
+        # Windows Vista/7/8
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+# -------------------
 
 # 引入项目模块
 from game_window import GameWindow

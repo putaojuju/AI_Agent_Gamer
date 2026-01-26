@@ -80,53 +80,55 @@ class GameWindow:
 
     def snapshot(self):
         """
-        后台截图 (PrintWindow)
+        混合截图策略：
+        1. 针对 Unity/DirectX：使用屏幕截取 (BitBlt from Screen DC)。
+        2. 坐标修正：使用 ClientToScreen 确保只截取游戏画面，不含标题栏。
         """
-        if not self.hwnd:
-            return None
+        if not self.hwnd: return None
 
         try:
-            # 获取客户区尺寸（去掉标题栏）
+            # 1. 获取客户区大小 (去掉标题栏的纯画面区域)
             left, top, right, bottom = win32gui.GetClientRect(self.hwnd)
             w = right - left
             h = bottom - top
             
             if w <= 0 or h <= 0: return None
 
-            # 创建设备上下文
-            hwindc = win32gui.GetWindowDC(self.hwnd)
+            # 2. 将客户区左上角 (0,0) 转换为屏幕绝对坐标
+            # 这解决了 DPI 缩放导致的错位问题，也确定了在屏幕上的真实位置
+            client_point = win32gui.ClientToScreen(self.hwnd, (0, 0))
+            screen_x, screen_y = client_point
+
+            # 3. 准备截图资源
+            # 获取整个屏幕的 DC (HWND_DESKTOP = 0)
+            # 这种方式对 Unity 兼容性最好，因为它截取的是显卡最终输出的画面
+            hwindc = win32gui.GetDC(0) 
             srcdc = win32ui.CreateDCFromHandle(hwindc)
             memdc = srcdc.CreateCompatibleDC()
             
-            # 创建位图
             bmp = win32ui.CreateBitmap()
             bmp.CreateCompatibleBitmap(srcdc, w, h)
             memdc.SelectObject(bmp)
             
-            # 截图核心：
-            # 参数 0: PrintWindow (包含标题栏，兼容性最好)
-            # 参数 1: (某些系统版本不同)
-            # 参数 2: PrintClient (仅内容区，容易黑屏)
-            # 这里的 0 通常对模拟器兼容性最好
-            result = ctypes.windll.user32.PrintWindow(self.hwnd, memdc.GetSafeHdc(), 0) 
+            # 4. 执行截图：从屏幕 DC 复制指定区域到内存 DC
+            # 参数: (目标x, 目标y), (宽, 高), 源DC, (源x, 源y), 操作码
+            memdc.BitBlt((0, 0), (w, h), srcdc, (screen_x, screen_y), win32con.SRCCOPY)
             
-            bmp_info = bmp.GetInfo()
+            # 5. 提取数据
             bmp_str = bmp.GetBitmapBits(True)
-            
-            # 转为 numpy 数组
             img = np.frombuffer(bmp_str, dtype='uint8')
             img.shape = (h, w, 4)
             
-            # 清理资源
+            # 6. 清理资源 (非常重要，否则会内存泄漏)
             win32gui.DeleteObject(bmp.GetHandle())
             memdc.DeleteDC()
             srcdc.DeleteDC()
-            win32gui.ReleaseDC(self.hwnd, hwindc)
+            win32gui.ReleaseDC(0, hwindc) # 释放屏幕 DC
 
-            # 去掉 Alpha 通道，转为 RGB (兼容 PIL/OpenCV)
-            # 这里的切片操作：[保留所有行, 保留所有列, 取前3个通道(BGR)][RGB反转]
+            # 7. 格式转换 BGRA -> RGB
             return img[:, :, :3][..., ::-1]
             
         except Exception as e:
-            logging.error(f"截图失败: {e}")
+            # 可以在这里记录日志
+            logging.error(f"Snapshot Error: {e}")
             return None
