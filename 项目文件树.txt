@@ -104,6 +104,7 @@ Game_script/
 │  └─ ui_atlas_manager.py
 ├─ user_data/               # 用户数据 (私密)
 │  └─ .gitkeep
+├─ assets/                  # 图片资源（自动生成占位图）
 ├─ .gitignore               # Git 忽略规则
 ├─ README.md                # 项目说明
 ├─ ai_brain.py              # AI 核心
@@ -137,5 +138,5 @@ Game_script/
   - 包含：`user_data/` 下的用户数据、`games/` 下的具体游戏脚本、`.trae/` 私有配置
 
 ## 版本信息
-- 当前版本: v3.1.0
+- 当前版本: v3.2.0
 - 技术栈: Python 3.11 + Conda + LangChain + RapidOCR + Doubao-Pro

@@ -33,6 +33,253 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
 
 # ============================================================================
+# 资源加载器类
+# ============================================================================
+
+class AssetManager:
+    """
+    资源加载器：管理图片资源，当图片不存在时自动生成占位图
+    """
+    def __init__(self):
+        self.assets_dir = "assets"
+        if not os.path.exists(self.assets_dir):
+            os.makedirs(self.assets_dir)
+        
+        # 预定义所有需要的图片
+        self.required_assets = {
+            "bg_curtain": os.path.join(self.assets_dir, "bg_curtain.png"),
+            "bg_console": os.path.join(self.assets_dir, "bg_console.png"),
+            "avatar_placeholder": os.path.join(self.assets_dir, "avatar_placeholder.png"),
+            "projector_off": os.path.join(self.assets_dir, "projector_off.png"),
+            "projector_on": os.path.join(self.assets_dir, "projector_on.png"),
+            "btn_start": os.path.join(self.assets_dir, "btn_start.png"),
+            "btn_stop": os.path.join(self.assets_dir, "btn_stop.png"),
+            "btn_config": os.path.join(self.assets_dir, "btn_config.png"),
+        }
+        
+        # 生成所有占位图
+        self.generate_placeholders()
+    
+    def generate_placeholders(self):
+        """生成所有占位图片"""
+        for name, path in self.required_assets.items():
+            if not os.path.exists(path):
+                self._create_placeholder(path, name)
+    
+    def _create_placeholder(self, path, name):
+        """创建单个占位图片"""
+        # 根据名称生成不同颜色的占位图
+        color_map = {
+            "bg_curtain": (200, 200, 200),  # 灰色幕布
+            "bg_console": (240, 240, 240),  # 白色控制台
+            "avatar_placeholder": (180, 210, 240),  # 蓝色看板娘位置
+            "projector_off": (120, 120, 120),  # 灰色投影仪（关闭）
+            "projector_on": (100, 200, 100),  # 绿色投影仪（开启）
+            "btn_start": (50, 200, 50),  # 绿色开始按钮
+            "btn_stop": (200, 50, 50),  # 红色停止按钮
+            "btn_config": (50, 150, 200),  # 蓝色配置按钮
+        }
+        
+        color = color_map.get(name, (200, 200, 200))
+        
+        # 根据名称设置不同的尺寸
+        size_map = {
+            "bg_curtain": (1280, 600),  # 幕布背景
+            "bg_console": (1280, 200),  # 控制台背景
+            "avatar_placeholder": (200, 200),  # 看板娘
+            "projector_off": (80, 80),  # 投影仪
+            "projector_on": (80, 80),  # 投影仪
+            "btn_start": (60, 60),  # 按钮
+            "btn_stop": (60, 60),  # 按钮
+            "btn_config": (60, 60),  # 按钮
+        }
+        
+        size = size_map.get(name, (100, 100))
+        
+        # 创建占位图
+        img = Image.new("RGB", size, color)
+        img.save(path)
+    
+    def get_asset(self, name):
+        """获取资源路径"""
+        return self.required_assets.get(name, None)
+    
+    def get_image(self, name, size=None):
+        """获取图片对象"""
+        path = self.get_asset(name)
+        if not path or not os.path.exists(path):
+            return None
+        
+        try:
+            img = Image.open(path)
+            if size:
+                img = img.resize(size)
+            return img
+        except Exception:
+            return None
+    
+    def get_ctk_image(self, name, size=None):
+        """获取CTkImage对象"""
+        img = self.get_image(name, size)
+        if img:
+            return ctk.CTkImage(light_image=img, dark_image=img, size=size if size else img.size)
+        return None
+
+# ============================================================================
+# 核心组件类 - DraggableWindow
+# ============================================================================
+
+class DraggableWindow(ctk.CTkFrame):
+    """
+    可拖拽、可缩放、可堆叠的悬浮窗口组件
+    """
+    def __init__(self, master, title="Window", width=400, height=300, **kwargs):
+        super().__init__(master, width=width, height=height, corner_radius=10, **kwargs)
+        
+        # 窗口属性
+        self.title = title
+        self.is_dragging = False
+        self.is_resizing = False
+        self.start_x = 0
+        self.start_y = 0
+        self.start_width = width
+        self.start_height = height
+        self.min_width = 200
+        self.min_height = 150
+        
+        # 设置绝对定位
+        self.place(x=100, y=100)
+        
+        # 创建窗口内容
+        self.create_widgets()
+        
+        # 绑定事件
+        self.bind_events()
+    
+    def create_widgets(self):
+        """创建窗口组件"""
+        # 1. 标题栏
+        self.title_bar = ctk.CTkFrame(self, height=30, fg_color="#34495e", corner_radius=10)
+        self.title_bar.pack(fill="x", side="top")
+        
+        # 标题文本
+        self.title_label = ctk.CTkLabel(self.title_bar, text=self.title, font=ctk.CTkFont(size=12, weight="bold"))
+        self.title_label.pack(side="left", padx=10, pady=5)
+        
+        # 关闭按钮
+        self.close_btn = ctk.CTkButton(self.title_bar, text="×", width=20, height=20, fg_color="#e74c3c", hover_color="#c0392b", command=self.hide)
+        self.close_btn.pack(side="right", padx=5, pady=5)
+        
+        # 2. 内容容器
+        self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # 3. 右下角缩放柄
+        self.resize_handle = ctk.CTkFrame(self, width=10, height=10, fg_color="#3498db")
+        self.resize_handle.place(x=self.winfo_width()-10, y=self.winfo_height()-10)
+    
+    def bind_events(self):
+        """绑定鼠标事件"""
+        # 标题栏拖拽
+        self.title_bar.bind("<Button-1>", self.on_drag_start)
+        self.title_bar.bind("<B1-Motion>", self.on_drag_motion)
+        
+        # 窗口点击置顶
+        self.bind("<Button-1>", self.on_window_click)
+        self.content_frame.bind("<Button-1>", self.on_window_click)
+        
+        # 缩放柄事件
+        self.resize_handle.bind("<Button-1>", self.on_resize_start)
+        self.resize_handle.bind("<B1-Motion>", self.on_resize_motion)
+        
+        # 释放事件
+        self.bind("<ButtonRelease-1>", self.on_release)
+    
+    def on_drag_start(self, event):
+        """开始拖拽"""
+        self.is_dragging = True
+        self.start_x = event.x_root
+        self.start_y = event.y_root
+        self.lift()  # 点击时置顶
+    
+    def on_drag_motion(self, event):
+        """拖拽中"""
+        if not self.is_dragging:
+            return
+        
+        # 计算移动距离
+        delta_x = event.x_root - self.start_x
+        delta_y = event.y_root - self.start_y
+        
+        # 获取当前位置
+        x = self.winfo_x() + delta_x
+        y = self.winfo_y() + delta_y
+        
+        # 更新位置
+        self.place_configure(x=max(0, x), y=max(0, y))
+        
+        # 更新起始点
+        self.start_x = event.x_root
+        self.start_y = event.y_root
+    
+    def on_resize_start(self, event):
+        """开始缩放"""
+        self.is_resizing = True
+        self.start_x = event.x_root
+        self.start_y = event.y_root
+        self.start_width = self.winfo_width()
+        self.start_height = self.winfo_height()
+        self.lift()  # 点击时置顶
+    
+    def on_resize_motion(self, event):
+        """缩放中"""
+        if not self.is_resizing:
+            return
+        
+        # 计算缩放距离
+        delta_x = event.x_root - self.start_x
+        delta_y = event.y_root - self.start_y
+        
+        # 计算新尺寸
+        new_width = max(self.min_width, self.start_width + delta_x)
+        new_height = max(self.min_height, self.start_height + delta_y)
+        
+        # 更新尺寸
+        self.configure(width=new_width, height=new_height)
+        
+        # 更新缩放柄位置
+        self.resize_handle.place(x=new_width-10, y=new_height-10)
+    
+    def on_release(self, event):
+        """释放鼠标"""
+        self.is_dragging = False
+        self.is_resizing = False
+    
+    def on_window_click(self, event):
+        """点击窗口时置顶"""
+        self.lift()
+    
+    def show(self):
+        """显示窗口"""
+        self.lift()
+        self.place_configure(state="normal")
+    
+    def hide(self):
+        """隐藏窗口"""
+        self.place_forget()
+    
+    def toggle(self):
+        """切换显示/隐藏状态"""
+        if self.winfo_ismapped():
+            self.hide()
+        else:
+            self.show()
+    
+    def get_content_frame(self):
+        """获取内容容器"""
+        return self.content_frame
+
+# ============================================================================
 # 辅助组件类定义 (设置弹窗、日志卡片、日志面板)
 # ============================================================================
 
@@ -282,34 +529,42 @@ class ThoughtStreamPanel(ctk.CTkFrame):
         for widget in self.scroll_frame.winfo_children(): widget.destroy()
 
 # ============================================================================
-# 主程序类 AICmdCenter
+# 主程序类 AICmdCenter - 全息投影控制台
 # ============================================================================
 
 class AICmdCenter(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("AI Game Agent - Command Center")
+        self.title("AI Game Agent - 全息投影控制台")
         self.geometry("1280x800")
+        self.resizable(True, True)
         
         # 核心模块初始化
         self.config_manager = ConfigManager()
         self.knowledge_base = KnowledgeBase()
         self.ui_queue = queue.Queue()
+        self.asset_manager = AssetManager()
         
         self.game_window_driver = GameWindow() 
         self.agent = SmartAgent(ui_queue=self.ui_queue, game_window=self.game_window_driver)
         
         # 窗口映射字典
         self.window_map = {}
+        
+        # 投影仪状态
+        self.projector_states = {
+            "game": False,
+            "log": False
+        }
 
-        # 布局配置
-        self.grid_columnconfigure(1, weight=3)
-        self.grid_columnconfigure(2, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-
-        self.create_sidebar()
-        self.create_viewport()
-        self.create_thought_stream()
+        # 创建分层背景
+        self.create_background()
+        
+        # 创建悬浮窗口
+        self.create_floating_windows()
+        
+        # 创建控制台区域
+        self.create_console()
         
         self.running = True
         self.log_thread = threading.Thread(target=self.process_ui_queue, daemon=True)
@@ -319,31 +574,95 @@ class AICmdCenter(ctk.CTk):
         self.refresh_game_list()
         self.refresh_window_list() # 自动扫描一次窗口
 
-    def create_sidebar(self):
-        self.sidebar = ctk.CTkFrame(self, width=240, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_propagate(False)
-
-        # 1. 标题
-        ctk.CTkLabel(self.sidebar, text="🤖 AI AGENT", font=("Arial", 20, "bold")).pack(pady=(20, 5))
+    def create_background(self):
+        """创建分层背景"""
+        # Layer 0: 底图（灰色幕布 + 白色控制台）
+        self.bg_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.bg_frame.pack(fill="both", expand=True)
         
-        # 2. 游戏配置选择
-        ctk.CTkLabel(self.sidebar, text="1. 游戏配置 (Game Config)", anchor="w", font=("Arial", 12, "bold")).pack(fill="x", padx=15, pady=(15, 5))
-        self.game_selector = ctk.CTkOptionMenu(self.sidebar, dynamic_resizing=False, command=self.on_game_change)
-        self.game_selector.pack(fill="x", padx=15)
+        # 灰色幕布（投影区）
+        self.curtain_frame = ctk.CTkFrame(self.bg_frame, height=600, fg_color="#e0e0e0")
+        self.curtain_frame.pack(fill="x", side="top")
+        self.curtain_frame.pack_propagate(False)
+        
+        # 白色控制台桌面
+        self.console_frame = ctk.CTkFrame(self.bg_frame, height=200, fg_color="#f5f5f5")
+        self.console_frame.pack(fill="x", side="bottom")
+        self.console_frame.pack_propagate(False)
 
-        # 3. 窗口连接器 (下拉列表)
-        ctk.CTkLabel(self.sidebar, text="2. 锁定窗口 (Select Window)", anchor="w", font=("Arial", 12, "bold")).pack(fill="x", padx=15, pady=(20, 5))
+    def create_floating_windows(self):
+        """创建悬浮窗口"""
+        # 游戏画面窗口
+        self.win_game = DraggableWindow(self.curtain_frame, title="🎮 游戏画面", width=640, height=480)
+        self.win_game.hide()
+        
+        # 日志窗口
+        self.win_log = DraggableWindow(self.curtain_frame, title="🧠 思维流", width=500, height=400)
+        self.win_log.hide()
+        
+        # 填充游戏窗口内容
+        self.setup_game_window()
+        
+        # 填充日志窗口内容
+        self.setup_log_window()
+
+    def setup_game_window(self):
+        """设置游戏窗口内容"""
+        content_frame = self.win_game.get_content_frame()
+        
+        # 工具栏
+        tools = ctk.CTkFrame(content_frame, height=40, fg_color="#2b2b2b")
+        tools.pack(fill="x", side="top")
+        ctk.CTkLabel(tools, text=" 👁️ 实时视觉 (Live Vision) ", font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        self.view_mode = ctk.CTkSegmentedButton(tools, values=["原始画面", "SoM网格", "UI匹配"], command=self.change_view_mode)
+        self.view_mode.set("原始画面")
+        self.view_mode.pack(side="right", padx=10, pady=5)
+
+        # 图像容器
+        self.image_container = ctk.CTkFrame(content_frame, fg_color="transparent")
+        self.image_container.pack(fill="both", expand=True, padx=10, pady=10)
+        self.preview_label = ctk.CTkLabel(self.image_container, text="请在控制台选择窗口并连接...", text_color="gray")
+        self.preview_label.pack(fill="both", expand=True)
+
+    def setup_log_window(self):
+        """设置日志窗口内容"""
+        content_frame = self.win_log.get_content_frame()
+        
+        # 创建思维流面板
+        self.thought_panel = ThoughtStreamPanel(content_frame, fg_color="transparent")
+        self.thought_panel.pack(fill="both", expand=True)
+
+    def create_console(self):
+        """创建控制台区域"""
+        # 1. 左侧：看板娘位置
+        self.avatar_frame = ctk.CTkFrame(self.console_frame, width=200, height=180, fg_color="#e3f2fd")
+        self.avatar_frame.place(x=20, y=10)
+        
+        avatar_img = self.asset_manager.get_ctk_image("avatar_placeholder", size=(180, 180))
+        self.avatar_label = ctk.CTkLabel(self.avatar_frame, image=avatar_img, text="")
+        self.avatar_label.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # 2. 中间：游戏配置和窗口选择
+        self.control_panel = ctk.CTkFrame(self.console_frame, width=400, height=180, fg_color="transparent")
+        self.control_panel.place(x=240, y=10)
+        
+        # 游戏配置选择
+        ctk.CTkLabel(self.control_panel, text="🎮 游戏配置", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
+        self.game_selector = ctk.CTkOptionMenu(self.control_panel, dynamic_resizing=False, command=self.on_game_change)
+        self.game_selector.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # 窗口连接器
+        ctk.CTkLabel(self.control_panel, text="🖥️ 窗口选择", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
         
         # 容器：放置下拉框和刷新按钮
-        win_select_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        win_select_frame.pack(fill="x", padx=15, pady=5)
+        win_select_frame = ctk.CTkFrame(self.control_panel, fg_color="transparent")
+        win_select_frame.pack(fill="x", padx=10, pady=0)
         
         self.window_selector = ctk.CTkOptionMenu(
             win_select_frame, 
             dynamic_resizing=False,
             values=["请点击刷新..."],
-            width=160 
+            width=250 
         )
         self.window_selector.pack(side="left", fill="x", expand=True)
         
@@ -354,54 +673,104 @@ class AICmdCenter(ctk.CTk):
         self.btn_refresh_win.pack(side="right", padx=(5, 0))
         
         self.btn_link = ctk.CTkButton(
-            self.sidebar, text="🔗 锁定选中窗口", fg_color="#2980b9", 
+            self.control_panel, text="🔗 锁定选中窗口", fg_color="#2980b9", 
             command=self.link_selected_window
         )
-        self.btn_link.pack(fill="x", padx=15, pady=5)
+        self.btn_link.pack(fill="x", padx=10, pady=5)
         
-        self.lbl_link_status = ctk.CTkLabel(self.sidebar, text="未连接", text_color="gray", font=("Arial", 11))
-        self.lbl_link_status.pack(pady=2)
-
-        # 4. 运行控制
-        ctk.CTkLabel(self.sidebar, text="3. 运行控制 (Control)", anchor="w", font=("Arial", 12, "bold")).pack(fill="x", padx=15, pady=(30, 5))
+        self.lbl_link_status = ctk.CTkLabel(self.control_panel, text="未连接", text_color="gray", font=("Arial", 11))
+        self.lbl_link_status.pack(padx=10, pady=2)
         
+        # 3. 右侧：投影仪和控制按钮
+        self.projector_panel = ctk.CTkFrame(self.console_frame, width=500, height=180, fg_color="transparent")
+        self.projector_panel.place(x=660, y=10)
+        
+        # 投影仪标题
+        ctk.CTkLabel(self.projector_panel, text="📽️ 投影仪", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
+        
+        # 投影仪按钮容器
+        projector_btns_frame = ctk.CTkFrame(self.projector_panel, fg_color="transparent")
+        projector_btns_frame.pack(fill="x", padx=10, pady=5)
+        
+        # 游戏投影仪
+        self.btn_projector_game = ctk.CTkButton(
+            projector_btns_frame, 
+            text="🎮 游戏画面", 
+            fg_color="#90caf9", 
+            hover_color="#64b5f6",
+            width=150,
+            command=lambda: self.toggle_projector("game")
+        )
+        self.btn_projector_game.pack(side="left", padx=10)
+        
+        # 日志投影仪
+        self.btn_projector_log = ctk.CTkButton(
+            projector_btns_frame, 
+            text="🧠 思维流", 
+            fg_color="#90caf9", 
+            hover_color="#64b5f6",
+            width=150,
+            command=lambda: self.toggle_projector("log")
+        )
+        self.btn_projector_log.pack(side="left", padx=10)
+        
+        # 控制按钮容器
+        control_btns_frame = ctk.CTkFrame(self.projector_panel, fg_color="transparent")
+        control_btns_frame.pack(fill="x", padx=10, pady=10)
+        
+        # 开始按钮
         self.btn_start = ctk.CTkButton(
-            self.sidebar, text="▶ 启动代理", fg_color="#27ae60", hover_color="#2ecc71",
-            height=40, font=("Arial", 14, "bold"), state="disabled",
+            control_btns_frame, 
+            text="▶ 启动代理", 
+            fg_color="#4caf50", 
+            hover_color="#45a049",
+            width=120,
+            state="disabled",
             command=self.start_agent
         )
-        self.btn_start.pack(fill="x", padx=15, pady=5)
+        self.btn_start.pack(side="left", padx=10)
 
+        # 停止按钮
         self.btn_stop = ctk.CTkButton(
-            self.sidebar, text="⏹ 停止", fg_color="#c0392b", hover_color="#e74c3c",
-            height=40, font=("Arial", 14, "bold"), state="disabled",
+            control_btns_frame, 
+            text="⏹ 停止", 
+            fg_color="#f44336", 
+            hover_color="#da190b",
+            width=120,
+            state="disabled",
             command=self.stop_agent
         )
-        self.btn_stop.pack(fill="x", padx=15, pady=5)
+        self.btn_stop.pack(side="left", padx=10)
 
-        # 5. 底部设置
-        ctk.CTkButton(self.sidebar, text="⚙️ 系统配置", fg_color="#34495e", command=lambda: SettingsDialog(self)).pack(side="bottom", fill="x", padx=15, pady=20)
+        # 配置按钮
+        self.btn_config = ctk.CTkButton(
+            control_btns_frame, 
+            text="⚙️ 配置", 
+            fg_color="#2196f3", 
+            hover_color="#0b7dda",
+            width=120,
+            command=lambda: SettingsDialog(self)
+        )
+        self.btn_config.pack(side="left", padx=10)
 
-    def create_viewport(self):
-        self.viewport = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=0)
-        self.viewport.grid(row=0, column=1, sticky="nsew", padx=2)
+    def toggle_projector(self, projector_type):
+        """切换投影仪状态"""
+        self.projector_states[projector_type] = not self.projector_states[projector_type]
         
-        tools = ctk.CTkFrame(self.viewport, height=40, fg_color="#2b2b2b")
-        tools.pack(fill="x", side="top")
-        ctk.CTkLabel(tools, text=" 👁️ 实时视觉 (Live Vision) ", font=("Arial", 12, "bold")).pack(side="left", padx=10)
-        self.view_mode = ctk.CTkSegmentedButton(tools, values=["原始画面", "SoM网格", "UI匹配"], command=self.change_view_mode)
-        self.view_mode.set("原始画面")
-        self.view_mode.pack(side="right", padx=10, pady=5)
-
-        self.image_container = ctk.CTkFrame(self.viewport, fg_color="transparent")
-        self.image_container.pack(fill="both", expand=True, padx=10, pady=10)
-        self.preview_label = ctk.CTkLabel(self.image_container, text="请在左侧选择窗口并连接...", text_color="gray")
-        self.preview_label.pack(fill="both", expand=True)
-
-    def create_thought_stream(self):
-        self.thought_panel = ThoughtStreamPanel(self, width=380, corner_radius=0)
-        self.thought_panel.grid(row=0, column=2, sticky="nsew")
-        self.thought_panel.grid_propagate(False)
+        if projector_type == "game":
+            if self.projector_states[projector_type]:
+                self.win_game.show()
+                self.add_log("游戏投影仪已开启", type="SYSTEM")
+            else:
+                self.win_game.hide()
+                self.add_log("游戏投影仪已关闭", type="SYSTEM")
+        elif projector_type == "log":
+            if self.projector_states[projector_type]:
+                self.win_log.show()
+                self.add_log("日志投影仪已开启", type="SYSTEM")
+            else:
+                self.win_log.hide()
+                self.add_log("日志投影仪已关闭", type="SYSTEM")
 
     # --- 逻辑功能实现 ---
 
@@ -423,8 +792,7 @@ class AICmdCenter(ctk.CTk):
                 display_list.append(display_name)
         
         self.window_selector.configure(values=display_list)
-        if display_list:
-            self.window_selector.set(display_list[0])
+        if display_list: self.window_selector.set(display_list[0])
         
         self.add_log(f"已扫描到 {len(windows)} 个窗口", type="SYSTEM")
 
@@ -503,13 +871,12 @@ class AICmdCenter(ctk.CTk):
             ratio = min(display_w / img.width, display_h / img.height)
             new_size = (int(img.width * ratio), int(img.height * ratio))
             
-            # --- FIX START: 使用 CTkImage 替代 ImageTk.PhotoImage ---
+            # 使用 CTkImage
             ctk_img = ctk.CTkImage(
                 light_image=img,
                 dark_image=img,
                 size=new_size
             )
-            # --- FIX END ---
             
             self.preview_label.configure(image=ctk_img, text="")
             self.preview_label.image = ctk_img # 保持引用防止被垃圾回收
