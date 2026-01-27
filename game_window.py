@@ -14,36 +14,27 @@ import logging
 
 class GameWindow:
     def __init__(self):
-        self.hwnd = None
+        self.hwnd = None # 主窗口句柄
+        self.render_hwnd = None # 实际渲染的子窗口句柄
         self.window_title = ""
         self.width = 0
         self.height = 0
 
     def get_all_windows(self):
-        """
-        获取当前所有可见窗口的列表
-        返回: List[Tuple(hwnd, title)]
-        """
+        """获取所有可见窗口"""
         windows = []
-        
         def callback(hwnd, extra):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
-                # 过滤逻辑：
-                # 1. 标题不为空
-                # 2. 忽略 "Program Manager" 等系统窗口
                 if title and title != "Program Manager":
-                    # 3. 尺寸过滤：太小的窗口通常不是游戏 (例如小于 200x200)
                     rect = win32gui.GetWindowRect(hwnd)
                     w = rect[2] - rect[0]
                     h = rect[3] - rect[1]
                     if w > 200 and h > 200: 
                         windows.append((hwnd, title))
             return True
-
         try:
             win32gui.EnumWindows(callback, None)
-            # 按标题排序，方便查找
             windows.sort(key=lambda x: x[1])
             return windows
         except Exception as e:
@@ -51,58 +42,80 @@ class GameWindow:
             return []
 
     def init_hwnd(self, target_hwnd):
-        """
-        直接通过句柄初始化
-        Args:
-            target_hwnd: 窗口句柄 ID (int)
-        """
+        """初始化句柄并寻找渲染子窗口"""
         try:
-            # 确保句柄是整数
             target_hwnd = int(target_hwnd)
-            
             if win32gui.IsWindow(target_hwnd):
                 self.hwnd = target_hwnd
                 self.window_title = win32gui.GetWindowText(target_hwnd)
                 
-                # 获取窗口大小
-                rect = win32gui.GetWindowRect(target_hwnd)
+                # --- 关键修改：寻找真正的渲染子窗口 ---
+                self.render_hwnd = self._find_render_child(self.hwnd)
+                
+                # 如果没找到子窗口，回退到主窗口
+                final_hwnd = self.render_hwnd if self.render_hwnd else self.hwnd
+                
+                # 获取尺寸
+                rect = win32gui.GetClientRect(final_hwnd)
                 self.width = rect[2] - rect[0]
                 self.height = rect[3] - rect[1]
                 
-                logging.info(f"窗口已锁定: {self.window_title} (HWND: {self.hwnd})")
+                logging.info(f"窗口锁定: {self.window_title} (Main: {self.hwnd}, Render: {self.render_hwnd})")
                 return True
             else:
-                logging.warning(f"无效的窗口句柄: {target_hwnd}")
                 return False
         except Exception as e:
-            logging.error(f"初始化窗口句柄失败: {e}")
+            logging.error(f"初始化失败: {e}")
             return False
+
+    def _find_render_child(self, parent_hwnd):
+        """
+        遍历寻找面积最大的子窗口
+        Unity/DMM 游戏通常在子窗口中渲染
+        """
+        child_windows = []
+        def callback(hwnd, extra):
+            # 必须是可见的子窗口
+            if win32gui.IsWindowVisible(hwnd):
+                rect = win32gui.GetClientRect(hwnd)
+                area = (rect[2] - rect[0]) * (rect[3] - rect[1])
+                child_windows.append((hwnd, area))
+            return True
+        
+        try:
+            win32gui.EnumChildWindows(parent_hwnd, callback, None)
+            if not child_windows:
+                return None
+            
+            # 按面积降序排列，取最大的那个
+            child_windows.sort(key=lambda x: x[1], reverse=True)
+            best_child = child_windows[0][0]
+            
+            # 如果最大的子窗口面积太小（比如只是个按钮），则认为没有渲染窗口
+            if child_windows[0][1] < 10000:
+                return None
+                
+            return best_child
+        except Exception:
+            return None
 
     def snapshot(self):
         """
-        混合截图策略：
-        1. 针对 Unity/DirectX：使用屏幕截取 (BitBlt from Screen DC)。
-        2. 坐标修正：使用 ClientToScreen 确保只截取游戏画面，不含标题栏。
+        截图方法：优先对渲染子窗口使用 PrintWindow
         """
-        if not self.hwnd: return None
+        # 优先使用子窗口，没有则用主窗口
+        target_hwnd = self.render_hwnd if self.render_hwnd else self.hwnd
+        
+        if not target_hwnd: return None
 
         try:
-            # 1. 获取客户区大小 (去掉标题栏的纯画面区域)
-            left, top, right, bottom = win32gui.GetClientRect(self.hwnd)
+            left, top, right, bottom = win32gui.GetClientRect(target_hwnd)
             w = right - left
             h = bottom - top
             
             if w <= 0 or h <= 0: return None
 
-            # 2. 将客户区左上角 (0,0) 转换为屏幕绝对坐标
-            # 这解决了 DPI 缩放导致的错位问题，也确定了在屏幕上的真实位置
-            client_point = win32gui.ClientToScreen(self.hwnd, (0, 0))
-            screen_x, screen_y = client_point
-
-            # 3. 准备截图资源
-            # 获取整个屏幕的 DC (HWND_DESKTOP = 0)
-            # 这种方式对 Unity 兼容性最好，因为它截取的是显卡最终输出的画面
-            hwindc = win32gui.GetDC(0) 
+            hwindc = win32gui.GetWindowDC(target_hwnd)
             srcdc = win32ui.CreateDCFromHandle(hwindc)
             memdc = srcdc.CreateCompatibleDC()
             
@@ -110,25 +123,25 @@ class GameWindow:
             bmp.CreateCompatibleBitmap(srcdc, w, h)
             memdc.SelectObject(bmp)
             
-            # 4. 执行截图：从屏幕 DC 复制指定区域到内存 DC
-            # 参数: (目标x, 目标y), (宽, 高), 源DC, (源x, 源y), 操作码
-            memdc.BitBlt((0, 0), (w, h), srcdc, (screen_x, screen_y), win32con.SRCCOPY)
+            # 使用 PrintWindow (Flag 2) 截取后台画面
+            # 对子窗口使用 PrintWindow 通常能绕过白屏问题
+            result = ctypes.windll.user32.PrintWindow(target_hwnd, memdc.GetSafeHdc(), 2)
             
-            # 5. 提取数据
+            # 如果失败，尝试旧版 Flag 0
+            if result == 0:
+                ctypes.windll.user32.PrintWindow(target_hwnd, memdc.GetSafeHdc(), 0)
+            
             bmp_str = bmp.GetBitmapBits(True)
             img = np.frombuffer(bmp_str, dtype='uint8')
             img.shape = (h, w, 4)
             
-            # 6. 清理资源 (非常重要，否则会内存泄漏)
             win32gui.DeleteObject(bmp.GetHandle())
             memdc.DeleteDC()
             srcdc.DeleteDC()
-            win32gui.ReleaseDC(0, hwindc) # 释放屏幕 DC
+            win32gui.ReleaseDC(target_hwnd, hwindc)
 
-            # 7. 格式转换 BGRA -> RGB
             return img[:, :, :3][..., ::-1]
             
         except Exception as e:
-            # 可以在这里记录日志
-            logging.error(f"Snapshot Error: {e}")
+            logging.error(f"截图失败: {e}")
             return None
