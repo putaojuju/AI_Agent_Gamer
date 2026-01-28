@@ -22,15 +22,24 @@ class SmartAgent:
         self.ui_queue = ui_queue
         self.running = False
     
-    def _image_to_base64(self, image_array: np.ndarray) -> str:
-        """将图像数组转换为base64编码"""
+    def _image_to_base64(self, image_array: np.ndarray, max_size: int = 1024) -> str:
+        """将图像数组转换为base64编码
+        
+        Args:
+            image_array: numpy 图像数组
+            max_size: 最大边长，用于压缩以节省 Token（默认 1024）
+        """
         try:
             # 转换为PIL图像
             img = Image.fromarray(image_array)
             
+            # 缩放图片以节省 Token（复用 vision_core.py 的逻辑）
+            if max(img.size) > max_size:
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
             # 保存到内存缓冲区
             buffer = io.BytesIO()
-            img.save(buffer, format="JPEG")
+            img.save(buffer, format="JPEG", quality=85)
             
             # 编码为base64
             base64_data = base64.b64encode(buffer.getvalue()).decode("utf-8")
@@ -257,21 +266,26 @@ class SmartAgent:
         return result
     
     def execute_action(self, action: str, x: int, y: int) -> bool:
-        """执行操作"""
+        """执行操作
+        
+        注意: x, y 已经是屏幕绝对坐标（由 _normalize_to_pixel 转换而来），
+        因此调用 mouse_controller 时不应传入 hwnd，避免双重偏移
+        """
         if not self.game_window.hwnd:
             if self.ui_queue:
                 self.ui_queue.put({"title": "游戏窗口未连接", "type": "ERROR", "detail": "hwnd 为空，无法执行操作"})
             return False
         
         try:
+            # 传入 None 作为 hwnd，表示坐标已经是屏幕绝对坐标
             if action == "click":
-                success = self.mouse_controller.click(x, y, self.game_window.hwnd)
+                success = self.mouse_controller.click(x, y, None)
             elif action == "double_click":
-                success = self.mouse_controller.double_click(x, y, self.game_window.hwnd)
+                success = self.mouse_controller.double_click(x, y, None)
             elif action == "right_click":
-                success = self.mouse_controller.right_click(x, y, self.game_window.hwnd)
+                success = self.mouse_controller.right_click(x, y, None)
             elif action == "move":
-                success = self.mouse_controller.move(x, y, self.game_window.hwnd)
+                success = self.mouse_controller.move(x, y, None)
             else:
                 success = False
             

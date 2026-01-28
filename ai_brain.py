@@ -1,6 +1,6 @@
 import base64
 import traceback
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from config_manager import ConfigManager
 
 class AIBrain:
@@ -10,6 +10,10 @@ class AIBrain:
         self.model = self.config_manager.get("ai.model", "doubao-pro")
         self.temperature = self.config_manager.get("ai.temperature", 0.7)
         self.endpoint_id = self.config_manager.get("ai.endpoint_id", "")
+        
+        # 短期记忆：保存最近的历史记录
+        self.history: List[Dict[str, Any]] = []
+        self.max_history = 3  # 最大保留轮数
     
     def _get_openai_client(self):
         """获取OpenAI兼容客户端"""
@@ -69,9 +73,11 @@ class AIBrain:
             default_system_prompt = seed_system_prompt
             final_system_prompt = system_prompt or default_system_prompt
             
-            # 构建消息
+            # 构建消息（包含历史记录）
             messages = [
                 {"role": "system", "content": final_system_prompt},
+                # 添加历史记录
+                *self._format_history(),
                 {
                     "role": "user",
                     "content": [
@@ -96,6 +102,9 @@ class AIBrain:
             
             # 获取响应内容
             response_content = response.choices[0].message.content
+            
+            # 保存到历史记录
+            self._add_to_history(image_base64, response_content)
             
             # 构建原始响应
             raw_response = {
@@ -220,3 +229,52 @@ class AIBrain:
         self.model = self.config_manager.get("ai.model", "doubao-pro")
         self.temperature = self.config_manager.get("ai.temperature", 0.7)
         self.endpoint_id = self.config_manager.get("ai.endpoint_id", "")
+    
+    def _format_history(self) -> List[Dict]:
+        """将历史记录格式化为消息列表
+        
+        Returns:
+            格式化的历史消息列表
+        """
+        formatted = []
+        for item in self.history:
+            # 用户消息（包含图片）
+            user_content = [
+                {"type": "text", "text": "[历史] 请分析游戏画面。"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{item['image_base64']}"
+                    }
+                }
+            ]
+            formatted.append({"role": "user", "content": user_content})
+            
+            # AI 回复
+            formatted.append({"role": "assistant", "content": item['ai_response']})
+        
+        return formatted
+    
+    def _add_to_history(self, image_base64: str, ai_response: str):
+        """添加记录到历史，保持最大长度
+        
+        Args:
+            image_base64: 用户输入的图片 base64
+            ai_response: AI 的回复内容
+        """
+        self.history.append({
+            "image_base64": image_base64,
+            "ai_response": ai_response
+        })
+        
+        # 保持历史记录在限制范围内
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
+    
+    def clear_history(self):
+        """清空历史记录"""
+        self.history = []
+    
+    def get_history_count(self) -> int:
+        """获取当前历史记录数量"""
+        return len(self.history)

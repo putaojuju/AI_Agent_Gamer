@@ -27,6 +27,7 @@ from knowledge_manager import KnowledgeBase
 from config_manager import ConfigManager
 from ai_brain import AIBrain
 from logger_setup import logger, write_log
+from performance_monitor import performance_monitor
 
 # 设置外观模式
 ctk.set_appearance_mode("Dark")
@@ -131,10 +132,13 @@ class AssetManager:
 
 class DraggableWindow(ctk.CTkFrame):
     """
-    可拖拽、可缩放、可堆叠的悬浮窗口组件
+    可拖拽、可缩放、可堆叠、可透明的悬浮窗口组件
     """
-    def __init__(self, master, title="Window", width=400, height=300, **kwargs):
-        super().__init__(master, width=width, height=height, corner_radius=10, **kwargs)
+    def __init__(self, master, title="Window", width=400, height=300, start_x=100, start_y=100, **kwargs):
+        super().__init__(master, width=width, height=height, corner_radius=10, border_width=1, border_color="#555555", **kwargs)
+        
+        # 禁止 Pack 布局管理器自动调整窗口大小
+        self.pack_propagate(False)
         
         # 窗口属性
         self.title = title
@@ -146,9 +150,13 @@ class DraggableWindow(ctk.CTkFrame):
         self.start_height = height
         self.min_width = 200
         self.min_height = 150
+        self.current_x = start_x
+        self.current_y = start_y
+        self.is_transparent = False
         
         # 设置绝对定位
-        self.place(x=100, y=100)
+        self.place(x=self.current_x, y=self.current_y)
+        self.lift()  # 初始化时置顶
         
         # 创建窗口内容
         self.create_widgets()
@@ -158,42 +166,27 @@ class DraggableWindow(ctk.CTkFrame):
     
     def create_widgets(self):
         """创建窗口组件"""
-        # 1. 标题栏
-        self.title_bar = ctk.CTkFrame(self, height=30, fg_color="#34495e", corner_radius=10)
-        self.title_bar.pack(fill="x", side="top")
-        
-        # 标题文本
-        self.title_label = ctk.CTkLabel(self.title_bar, text=self.title, font=ctk.CTkFont(size=12, weight="bold"))
-        self.title_label.pack(side="left", padx=10, pady=5)
-        
-        # 关闭按钮
-        self.close_btn = ctk.CTkButton(self.title_bar, text="×", width=20, height=20, fg_color="#e74c3c", hover_color="#c0392b", command=self.hide)
-        self.close_btn.pack(side="right", padx=5, pady=5)
-        
-        # 2. 内容容器
+        # 内容容器（填满整个窗口）
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.content_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # 3. 右下角缩放柄
-        self.resize_handle = ctk.CTkFrame(self, width=10, height=10, fg_color="#3498db")
-        self.resize_handle.place(x=self.winfo_width()-10, y=self.winfo_height()-10)
     
     def bind_events(self):
         """绑定鼠标事件"""
-        # 标题栏拖拽
-        self.title_bar.bind("<Button-1>", self.on_drag_start)
-        self.title_bar.bind("<B1-Motion>", self.on_drag_motion)
+        # 鼠标中键拖拽：移动窗口位置
+        self.bind("<Button-2>", self.on_drag_start)
+        self.bind("<B2-Motion>", self.on_drag_motion)
+        self.content_frame.bind("<Button-2>", self.on_drag_start)
+        self.content_frame.bind("<B2-Motion>", self.on_drag_motion)
         
-        # 窗口点击置顶
-        self.bind("<Button-1>", self.on_window_click)
-        self.content_frame.bind("<Button-1>", self.on_window_click)
-        
-        # 缩放柄事件
-        self.resize_handle.bind("<Button-1>", self.on_resize_start)
-        self.resize_handle.bind("<B1-Motion>", self.on_resize_motion)
+        # 鼠标左键：调整窗口大小（整个窗口区域）
+        self.bind("<Button-1>", self.on_resize_start)
+        self.bind("<B1-Motion>", self.on_resize_motion)
+        self.content_frame.bind("<Button-1>", self.on_resize_start)
+        self.content_frame.bind("<B1-Motion>", self.on_resize_motion)
         
         # 释放事件
         self.bind("<ButtonRelease-1>", self.on_release)
+        self.bind("<ButtonRelease-2>", self.on_release)
     
     def on_drag_start(self, event):
         """开始拖拽"""
@@ -215,57 +208,84 @@ class DraggableWindow(ctk.CTkFrame):
         x = self.winfo_x() + delta_x
         y = self.winfo_y() + delta_y
         
+        # 边界限制
+        if self.master:
+            master_width = self.master.winfo_width()
+            master_height = self.master.winfo_height()
+            window_width = self.winfo_width()
+            window_height = self.winfo_height()
+            
+            # 确保窗口至少保留50px在可视区域内
+            x = max(0, min(x, master_width - 50))
+            y = max(0, min(y, master_height - 50))
+        
         # 更新位置
-        self.place_configure(x=max(0, x), y=max(0, y))
+        self.place_configure(x=x, y=y)
+        self.current_x = x
+        self.current_y = y
         
         # 更新起始点
         self.start_x = event.x_root
         self.start_y = event.y_root
     
     def on_resize_start(self, event):
-        """开始缩放"""
+        """开始缩放：记录初始状态"""
         self.is_resizing = True
-        self.start_x = event.x_root
-        self.start_y = event.y_root
-        self.start_width = self.winfo_width()
-        self.start_height = self.winfo_height()
-        self.lift()  # 点击时置顶
+        # 记录鼠标在屏幕上的绝对位置
+        self.resize_start_mouse_x = event.x_root
+        self.resize_start_mouse_y = event.y_root
+        # 记录窗口当前的尺寸
+        self.resize_start_w = self.winfo_width()
+        self.resize_start_h = self.winfo_height()
+        self.lift()  # 置顶
     
     def on_resize_motion(self, event):
-        """缩放中"""
+        """缩放中：计算增量并应用"""
         if not self.is_resizing:
             return
         
-        # 计算缩放距离
-        delta_x = event.x_root - self.start_x
-        delta_y = event.y_root - self.start_y
+        # 1. 计算鼠标移动了多少像素 (Delta)
+        delta_x = event.x_root - self.resize_start_mouse_x
+        delta_y = event.y_root - self.resize_start_mouse_y
         
-        # 计算新尺寸
-        new_width = max(self.min_width, self.start_width + delta_x)
-        new_height = max(self.min_height, self.start_height + delta_y)
+        # 2. 新尺寸 = 旧尺寸 + 移动量
+        new_width = self.resize_start_w + delta_x
+        new_height = self.resize_start_h + delta_y
         
-        # 更新尺寸
+        # 3. 限制最小尺寸
+        new_width = max(self.min_width, new_width)
+        new_height = max(self.min_height, new_height)
+        
+        # 4. 边界限制（防止超出父容器）
+        if self.master:
+            parent_w = self.master.winfo_width()
+            parent_h = self.master.winfo_height()
+            # 确保不超出右边界
+            if self.winfo_x() + new_width > parent_w:
+                new_width = parent_w - self.winfo_x()
+            # 确保不超出下边界
+            if self.winfo_y() + new_height > parent_h:
+                new_height = parent_h - self.winfo_y()
+        
+        # 5. 应用尺寸
         self.configure(width=new_width, height=new_height)
-        
-        # 更新缩放柄位置
-        self.resize_handle.place(x=new_width-10, y=new_height-10)
     
     def on_release(self, event):
         """释放鼠标"""
         self.is_dragging = False
         self.is_resizing = False
     
-    def on_window_click(self, event):
-        """点击窗口时置顶"""
-        self.lift()
-    
     def show(self):
         """显示窗口"""
         self.lift()
-        self.place_configure(state="normal")
+        self.place(x=self.current_x, y=self.current_y)
     
     def hide(self):
         """隐藏窗口"""
+        # 保存当前位置
+        if self.winfo_ismapped():
+            self.current_x = self.winfo_x()
+            self.current_y = self.winfo_y()
         self.place_forget()
     
     def toggle(self):
@@ -548,6 +568,9 @@ class AICmdCenter(ctk.CTk):
         self.game_window_driver = GameWindow() 
         self.agent = SmartAgent(ui_queue=self.ui_queue, game_window=self.game_window_driver)
         
+        # 启动性能监控
+        performance_monitor.start_monitoring()
+        
         # 窗口映射字典
         self.window_map = {}
         
@@ -593,11 +616,11 @@ class AICmdCenter(ctk.CTk):
     def create_floating_windows(self):
         """创建悬浮窗口"""
         # 游戏画面窗口
-        self.win_game = DraggableWindow(self.curtain_frame, title="🎮 游戏画面", width=640, height=480)
+        self.win_game = DraggableWindow(self.curtain_frame, title="🎮 游戏画面", width=640, height=480, start_x=20, start_y=20)
         self.win_game.hide()
         
         # 日志窗口
-        self.win_log = DraggableWindow(self.curtain_frame, title="🧠 思维流", width=500, height=400)
+        self.win_log = DraggableWindow(self.curtain_frame, title="🧠 思维流", width=500, height=400, start_x=680, start_y=20)
         self.win_log.hide()
         
         # 填充游戏窗口内容
@@ -911,7 +934,9 @@ class AICmdCenter(ctk.CTk):
         self.ui_queue.put({"title": text, "detail": detail, "type": type})
     
     def test_snapshot(self):
+        start_time = time.time()
         img = self.game_window_driver.snapshot()
+        performance_monitor.record_snapshot(time.time() - start_time)
         if img is not None:
             self.update_preview(img)
             self.add_log("视觉信号接入正常", type="VISION")
@@ -921,6 +946,10 @@ class AICmdCenter(ctk.CTk):
     def on_closing(self):
         self.running = False
         self.stop_agent()
+        # 停止性能监控并生成报告
+        report = performance_monitor.stop_monitoring()
+        if report:
+            self.add_log("性能监控报告已生成", detail=report[:500], type="SYSTEM")
         # 关闭日志文件
         logger.close()
         self.destroy()
