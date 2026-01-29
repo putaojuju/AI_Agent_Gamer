@@ -1,24 +1,34 @@
 # -*- coding: utf-8 -*-
-import customtkinter as ctk
-import threading
-import queue
-import time
+import sys
 import os
 import json
-from PIL import Image, ImageTk
-import ctypes
+import threading
+from datetime import datetime
+from PIL import Image
+import numpy as np
 
-# --- DPI 感知修复 ---
+# PySide6 导入
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QFrame, QLabel, QVBoxLayout,
+    QHBoxLayout, QStackedLayout, QScrollArea, QPushButton, QComboBox,
+    QLineEdit, QCheckBox, QDialog, QSizeGrip, QTextEdit, QSplitter,
+    QGraphicsDropShadowEffect, QSpacerItem, QSizePolicy, QGridLayout,
+    QGroupBox, QToolButton, QMenu, QSystemTrayIcon, QStyle
+)
+from PySide6.QtCore import (
+    Qt, Signal, QObject, QThread, QPoint, QSize, QTimer, QMetaObject,
+    Q_ARG, Slot
+)
+from PySide6.QtGui import (
+    QPixmap, QImage, QFont, QColor, QPalette, QIcon, QCursor,
+    QFontDatabase, QScreen, QGuiApplication
+)
+
+# qdarktheme 导入
 try:
-    # Windows 8.1 及以上
-    ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
-except Exception:
-    try:
-        # Windows Vista/7/8
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-# -------------------
+    import qdarktheme
+except ImportError:
+    qdarktheme = None
 
 # 引入项目模块
 from game_window import GameWindow
@@ -29,24 +39,1215 @@ from ai_brain import AIBrain
 from logger_setup import logger, write_log
 from performance_monitor import performance_monitor
 
-# 设置外观模式
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("dark-blue")
 
 # ============================================================================
-# 资源加载器类
+# Phase 3: 日志信号类 (Signal-driven 跨线程通信)
+# ============================================================================
+
+class LogSignals(QObject):
+    """日志信号类 - 用于跨线程日志通信"""
+    log_received = Signal(dict)
+    image_received = Signal(np.ndarray)
+    status_changed = Signal(str, str)  # message, type
+
+
+# 全局信号实例
+log_signals = LogSignals()
+
+
+# ============================================================================
+# Phase 2: 可拖拽窗口组件 (DraggableWindow)
+# ============================================================================
+
+class DraggableWindow(QFrame):
+    """
+    可拖拽、可缩放的悬浮窗口组件 (PySide6 版本)
+    使用 Qt 原生组件实现，避免手写复杂算法
+    """
+    def __init__(self, title="Window", parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._dragging = False
+        self._drag_start_pos = QPoint()
+        self._window_start_pos = QPoint()
+        
+        # 设置窗口属性
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMinimumSize(200, 150)
+        
+        # 应用 QSS 样式
+        self.setStyleSheet("""
+            DraggableWindow {
+                background-color: rgba(30, 30, 30, 230);
+                border: 1px solid #505050;
+                border-radius: 8px;
+            }
+        """)
+        
+        # 创建布局
+        self._setup_ui()
+        
+    def _setup_ui(self):
+        """设置 UI 布局"""
+        # 主布局
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(1, 1, 1, 1)
+        self.main_layout.setSpacing(0)
+        
+        # 标题栏
+        self.title_bar = QFrame()
+        self.title_bar.setFixedHeight(32)
+        self.title_bar.setStyleSheet("""
+            QFrame {
+                background-color: #2d2d2d;
+                border-top-left-radius: 7px;
+                border-top-right-radius: 7px;
+                border-bottom: 1px solid #404040;
+            }
+        """)
+        title_layout = QHBoxLayout(self.title_bar)
+        title_layout.setContentsMargins(10, 0, 5, 0)
+        title_layout.setSpacing(5)
+        
+        # 标题标签
+        self.title_label = QLabel(self._title)
+        self.title_label.setStyleSheet("color: #cccccc; font-size: 12px; font-weight: bold;")
+        title_layout.addWidget(self.title_label)
+        
+        title_layout.addStretch()
+        
+        # 关闭按钮
+        self.close_btn = QPushButton("×")
+        self.close_btn.setFixedSize(24, 24)
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #999999;
+                border: none;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #e81123;
+                color: white;
+                border-radius: 4px;
+            }
+        """)
+        self.close_btn.clicked.connect(self.hide)
+        title_layout.addWidget(self.close_btn)
+        
+        self.main_layout.addWidget(self.title_bar)
+        
+        # 内容区域
+        self.content_area = QFrame()
+        self.content_area.setStyleSheet("""
+            QFrame {
+                background-color: transparent;
+                border-bottom-left-radius: 7px;
+                border-bottom-right-radius: 7px;
+            }
+        """)
+        self.content_layout = QVBoxLayout(self.content_area)
+        self.content_layout.setContentsMargins(5, 5, 5, 5)
+        self.main_layout.addWidget(self.content_area, 1)
+        
+        # 右下角缩放手柄 (使用 Qt 原生 QSizeGrip)
+        self.size_grip = QSizeGrip(self)
+        self.size_grip.setStyleSheet("""
+            QSizeGrip {
+                background-color: #3498db;
+                width: 16px;
+                height: 16px;
+                border-bottom-right-radius: 6px;
+            }
+        """)
+        
+        # 将 size grip 添加到右下角
+        grip_container = QFrame()
+        grip_layout = QHBoxLayout(grip_container)
+        grip_layout.setContentsMargins(0, 0, 0, 0)
+        grip_layout.addStretch()
+        grip_layout.addWidget(self.size_grip, alignment=Qt.AlignBottom | Qt.AlignRight)
+        self.main_layout.addWidget(grip_container)
+        
+    def get_content_widget(self):
+        """获取内容区域 widget，用于添加自定义内容"""
+        return self.content_area
+    
+    def get_content_layout(self):
+        """获取内容区域布局"""
+        return self.content_layout
+    
+    def set_title(self, title: str):
+        """设置窗口标题"""
+        self._title = title
+        self.title_label.setText(title)
+    
+    # ========================================================================
+    # 拖拽逻辑 - 使用 event.globalPosition() 计算全局偏移
+    # ========================================================================
+    
+    def mousePressEvent(self, event):
+        """鼠标按下事件 - 开始拖拽"""
+        if event.button() == Qt.LeftButton:
+            # 检查是否点击在标题栏上
+            if self.title_bar.geometry().contains(event.pos()):
+                self._dragging = True
+                # 记录鼠标按下的全局位置
+                self._drag_start_pos = event.globalPosition().toPoint()
+                # 记录窗口当前位置
+                self._window_start_pos = self.pos()
+                event.accept()
+    
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 执行拖拽"""
+        if self._dragging and event.buttons() == Qt.LeftButton:
+            # 计算全局偏移量
+            delta = event.globalPosition().toPoint() - self._drag_start_pos
+            # 计算新位置
+            new_pos = self._window_start_pos + delta
+            self.move(new_pos)
+            event.accept()
+    
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件 - 结束拖拽"""
+        if event.button() == Qt.LeftButton:
+            self._dragging = False
+            event.accept()
+
+
+# ============================================================================
+# 日志卡片组件
+# ============================================================================
+
+class LogCard(QFrame):
+    """日志卡片组件 - 显示单条日志"""
+    
+    COLORS = {
+        "THOUGHT": "#9b59b6",  # 紫色
+        "VISION": "#3498db",   # 蓝色
+        "ACTION": "#2ecc71",   # 绿色
+        "SYSTEM": "#95a5a6",   # 灰色
+        "ERROR": "#e74c3c",    # 红色
+        "WARNING": "#f39c12"   # 橙色
+    }
+    
+    ICONS = {
+        "THOUGHT": "🧠", "VISION": "👁️", "ACTION": "🖱️",
+        "SYSTEM": "⚙️", "ERROR": "❌", "WARNING": "⚠️"
+    }
+    
+    def __init__(self, log_data: dict, parent=None):
+        super().__init__(parent)
+        
+        # 解析数据
+        raw_type = log_data.get("type", "SYSTEM")
+        self.log_type = raw_type.upper() if raw_type else "SYSTEM"
+        self.title_text = log_data.get("title", log_data.get("text", "Info"))
+        self.detail = log_data.get("detail", "")
+        
+        ts = log_data.get("time", datetime.now().timestamp())
+        self.timestamp = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+        
+        self.is_expanded = False
+        self.accent_color = self.COLORS.get(self.log_type, "#95a5a6")
+        self.icon = self.ICONS.get(self.log_type, "📝")
+        
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """设置 UI"""
+        self.setStyleSheet(f"""
+            LogCard {{
+                background-color: #2b2b2b;
+                border-radius: 6px;
+                border-left: 4px solid {self.accent_color};
+            }}
+            LogCard:hover {{
+                background-color: #353535;
+            }}
+        """)
+        
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(8, 6, 8, 6)
+        self.main_layout.setSpacing(4)
+        
+        # 标题行
+        self.header = QFrame()
+        self.header.setCursor(QCursor(Qt.PointingHandCursor))
+        self.header.setStyleSheet("background-color: transparent;")
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+        
+        # 时间戳
+        time_label = QLabel(f"[{self.timestamp}]")
+        time_label.setStyleSheet("color: #7f8c8d; font-size: 10px; font-family: Consolas;")
+        header_layout.addWidget(time_label)
+        
+        # 标题
+        title = QLabel(f"{self.icon} {self.title_text}")
+        title.setStyleSheet("color: #ecf0f1; font-size: 12px; font-weight: bold;")
+        title.setWordWrap(True)
+        header_layout.addWidget(title, 1)
+        
+        # 展开箭头
+        if self.detail:
+            self.arrow = QLabel("▶")
+            self.arrow.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+            header_layout.addWidget(self.arrow)
+        
+        self.main_layout.addWidget(self.header)
+        
+        # 详情区域 (初始隐藏)
+        if self.detail:
+            self.detail_widget = QTextEdit()
+            self.detail_widget.setPlainText(str(self.detail))
+            self.detail_widget.setReadOnly(True)
+            self.detail_widget.setStyleSheet("""
+                QTextEdit {
+                    background-color: #1a1a1a;
+                    color: #bdc3c7;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-family: Consolas;
+                    font-size: 11px;
+                }
+            """)
+            self.detail_widget.setMaximumHeight(200)
+            self.detail_widget.hide()
+            self.main_layout.addWidget(self.detail_widget)
+            
+            # 绑定点击事件
+            self.header.mousePressEvent = self._toggle_expand
+    
+    def _toggle_expand(self, event):
+        """切换展开/折叠状态"""
+        self.is_expanded = not self.is_expanded
+        
+        if self.is_expanded:
+            self.arrow.setText("▼")
+            self.detail_widget.show()
+            # 调整高度
+            line_count = len(self.detail.split('\n'))
+            height = min(400, max(60, line_count * 18))
+            self.detail_widget.setMaximumHeight(height)
+        else:
+            self.arrow.setText("▶")
+            self.detail_widget.hide()
+
+
+# ============================================================================
+# 日志面板组件
+# ============================================================================
+
+class LogPanel(QFrame):
+    """日志面板 - 管理日志流显示"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.log_history = []
+        self.current_filter = "ALL"
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """设置 UI"""
+        self.setStyleSheet("background-color: transparent;")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # 工具栏
+        toolbar = QFrame()
+        toolbar.setFixedHeight(40)
+        toolbar.setStyleSheet("background-color: #2b2b2b; border-bottom: 1px solid #404040;")
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(10, 0, 10, 0)
+        
+        title = QLabel("🧠 思维流")
+        title.setStyleSheet("color: #cccccc; font-size: 13px; font-weight: bold;")
+        toolbar_layout.addWidget(title)
+        
+        toolbar_layout.addStretch()
+        
+        # 过滤器
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(["ALL", "THOUGHT", "VISION", "ACTION", "SYSTEM"])
+        self.filter_combo.setCurrentText("ALL")
+        self.filter_combo.setFixedWidth(100)
+        self.filter_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #3d3d3d;
+                color: #cccccc;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3d3d3d;
+                color: #cccccc;
+                selection-background-color: #505050;
+            }
+        """)
+        self.filter_combo.currentTextChanged.connect(self._apply_filter)
+        toolbar_layout.addWidget(self.filter_combo)
+        
+        layout.addWidget(toolbar)
+        
+        # 滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #2b2b2b;
+                width: 10px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #505050;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #606060;
+            }
+        """)
+        
+        # 日志容器
+        self.log_container = QWidget()
+        self.log_layout = QVBoxLayout(self.log_container)
+        self.log_layout.setContentsMargins(5, 5, 5, 5)
+        self.log_layout.setSpacing(4)
+        self.log_layout.addStretch()
+        
+        scroll.setWidget(self.log_container)
+        layout.addWidget(scroll, 1)
+        
+        self.scroll_area = scroll
+    
+    def add_log(self, log_data: dict):
+        """添加日志"""
+        if "time" not in log_data:
+            log_data["time"] = datetime.now().timestamp()
+        
+        self.log_history.append(log_data)
+        if len(self.log_history) > 200:
+            self.log_history.pop(0)
+        
+        current_type = log_data.get("type", "SYSTEM").upper()
+        if self.current_filter == "ALL" or self.current_filter == current_type:
+            self._render_card(log_data)
+    
+    def _render_card(self, log_data: dict):
+        """渲染日志卡片"""
+        card = LogCard(log_data)
+        # 插入到 stretch 之前
+        self.log_layout.insertWidget(self.log_layout.count() - 1, card)
+        
+        # 自动滚动到底部
+        scrollbar = self.scroll_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    def _apply_filter(self, filter_type: str):
+        """应用过滤器"""
+        self.current_filter = filter_type
+        
+        # 清除现有卡片
+        while self.log_layout.count() > 1:
+            item = self.log_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 重新渲染
+        for log in self.log_history:
+            log_type = log.get("type", "SYSTEM").upper()
+            if filter_type == "ALL" or filter_type == log_type:
+                self._render_card(log)
+    
+    def clear(self):
+        """清空日志"""
+        self.log_history.clear()
+        while self.log_layout.count() > 1:
+            item = self.log_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+
+# ============================================================================
+# 设置对话框
+# ============================================================================
+
+class SettingsDialog(QDialog):
+    """设置对话框"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.config = ConfigManager()
+        self.setWindowTitle("系统配置 (Settings)")
+        self.setFixedSize(500, 450)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2b2b2b;
+            }
+            QLabel {
+                color: #cccccc;
+                font-size: 12px;
+            }
+            QLineEdit {
+                background-color: #3d3d3d;
+                color: #cccccc;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QComboBox {
+                background-color: #3d3d3d;
+                color: #cccccc;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2ecc71;
+            }
+        """)
+        
+        self._setup_ui()
+        self._load_config()
+    
+    def _setup_ui(self):
+        """设置 UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(30, 20, 30, 20)
+        layout.setSpacing(15)
+        
+        # 标题
+        title = QLabel("AI 模型配置")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ecf0f1;")
+        layout.addWidget(title)
+        
+        # API Key
+        layout.addWidget(QLabel("API Key:"))
+        self.entry_key = QLineEdit()
+        self.entry_key.setPlaceholderText("sk-xxxxxxxx")
+        self.entry_key.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.entry_key)
+        
+        self.show_key = QCheckBox("显示 API Key")
+        self.show_key.setStyleSheet("color: #cccccc;")
+        self.show_key.stateChanged.connect(self._toggle_key_visibility)
+        layout.addWidget(self.show_key)
+        
+        # Endpoint ID
+        layout.addWidget(QLabel("Endpoint ID (火山引擎节点号):"))
+        self.entry_endpoint = QLineEdit()
+        self.entry_endpoint.setPlaceholderText("ep-2024xxxx-xxxxx")
+        layout.addWidget(self.entry_endpoint)
+        
+        # Model Name
+        layout.addWidget(QLabel("Model Name (模型名称):"))
+        self.entry_model = QComboBox()
+        self.entry_model.addItems(["doubao-pro-4k", "doubao-lite-4k", "gpt-4o", "custom"])
+        layout.addWidget(self.entry_model)
+        
+        layout.addStretch()
+        
+        # 保存按钮
+        save_btn = QPushButton("💾 保存配置")
+        save_btn.clicked.connect(self._save_config)
+        layout.addWidget(save_btn)
+    
+    def _toggle_key_visibility(self, state):
+        """切换 API Key 可见性"""
+        if state == Qt.Checked:
+            self.entry_key.setEchoMode(QLineEdit.Normal)
+        else:
+            self.entry_key.setEchoMode(QLineEdit.Password)
+    
+    def _load_config(self):
+        """加载配置"""
+        self.entry_key.setText(self.config.get("ai.api_key", ""))
+        self.entry_endpoint.setText(self.config.get("ai.endpoint_id", ""))
+        model = self.config.get("ai.model", "doubao-pro-4k")
+        index = self.entry_model.findText(model)
+        if index >= 0:
+            self.entry_model.setCurrentIndex(index)
+    
+    def _save_config(self):
+        """保存配置"""
+        self.config.set("ai.api_key", self.entry_key.text().strip())
+        self.config.set("ai.endpoint_id", self.entry_endpoint.text().strip())
+        self.config.set("ai.model", self.entry_model.currentText())
+        self.accept()
+
+
+# ============================================================================
+# 主窗口类 (AICmdCenter)
+# ============================================================================
+
+class AICmdCenter(QMainWindow):
+    """AI 游戏代理控制台 - PySide6 版本"""
+    
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("AI Game Agent - 全息投影控制台")
+        self.setMinimumSize(1280, 800)
+        
+        # 核心模块初始化
+        self.config_manager = ConfigManager()
+        self.knowledge_base = KnowledgeBase()
+        self.asset_manager = AssetManager()
+        
+        self.game_window_driver = GameWindow()
+        self.agent = SmartAgent(ui_queue=None, game_window=self.game_window_driver)
+        
+        # 启动性能监控
+        performance_monitor.start_monitoring()
+        
+        # 窗口映射
+        self.window_map = {}
+        
+        # 投影仪状态
+        self.projector_states = {
+            "game": False,
+            "log": False
+        }
+        
+        # 设置中心窗口
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        
+        # 设置全局样式
+        self._setup_styles()
+        
+        # 创建 UI
+        self._setup_ui()
+        
+        # 连接信号
+        self._connect_signals()
+        
+        # 初始加载
+        self.refresh_game_list()
+        self.refresh_window_list()
+    
+    def _setup_styles(self):
+        """设置全局样式"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1a1a1a;
+            }
+            QWidget {
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            }
+        """)
+    
+    def _setup_ui(self):
+        """设置 UI 布局"""
+        main_layout = QVBoxLayout(self.central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # 分割器：投影区 | 控制台
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setHandleWidth(2)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #404040;
+            }
+        """)
+        
+        # ========== 上半部分：投影区 (灰色幕布) ==========
+        self.projection_area = QFrame()
+        self.projection_area.setStyleSheet("background-color: #e0e0e0;")
+        projection_layout = QHBoxLayout(self.projection_area)
+        projection_layout.setContentsMargins(20, 20, 20, 20)
+        projection_layout.setSpacing(20)
+        
+        # 提示标签
+        self.projection_hint = QLabel("点击控制台中的投影仪按钮开启窗口")
+        self.projection_hint.setStyleSheet("""
+            color: #808080;
+            font-size: 16px;
+            font-weight: bold;
+        """)
+        self.projection_hint.setAlignment(Qt.AlignCenter)
+        projection_layout.addWidget(self.projection_hint)
+        
+        splitter.addWidget(self.projection_area)
+        
+        # ========== 下半部分：控制台 (白色桌面) ==========
+        self.console_area = QFrame()
+        self.console_area.setStyleSheet("background-color: #f5f5f5;")
+        self.console_area.setMinimumHeight(200)
+        self.console_area.setMaximumHeight(250)
+        
+        self._setup_console()
+        
+        splitter.addWidget(self.console_area)
+        splitter.setSizes([600, 200])
+        
+        main_layout.addWidget(splitter)
+        
+        # 创建悬浮窗口 (初始隐藏)
+        self._create_floating_windows()
+    
+    def _setup_console(self):
+        """设置控制台区域"""
+        layout = QHBoxLayout(self.console_area)
+        layout.setContentsMargins(20, 10, 20, 10)
+        layout.setSpacing(20)
+        
+        # ---- 左侧：看板娘位置 ----
+        avatar_frame = QFrame()
+        avatar_frame.setFixedSize(200, 180)
+        avatar_frame.setStyleSheet("""
+            QFrame {
+                background-color: #e3f2fd;
+                border-radius: 8px;
+            }
+        """)
+        avatar_layout = QVBoxLayout(avatar_frame)
+        avatar_layout.setContentsMargins(10, 10, 10, 10)
+        
+        avatar_label = QLabel("看板娘")
+        avatar_label.setAlignment(Qt.AlignCenter)
+        avatar_label.setStyleSheet("color: #1976d2; font-size: 14px;")
+        avatar_layout.addWidget(avatar_label)
+        
+        layout.addWidget(avatar_frame)
+        
+        # ---- 中间：游戏配置和窗口选择 ----
+        control_frame = QFrame()
+        control_frame.setStyleSheet("background-color: transparent;")
+        control_layout = QVBoxLayout(control_frame)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(8)
+        
+        # 游戏配置
+        game_label = QLabel("🎮 游戏配置")
+        game_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #333;")
+        control_layout.addWidget(game_label)
+        
+        self.game_selector = QComboBox()
+        self.game_selector.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+                padding: 6px;
+                min-width: 200px;
+            }
+        """)
+        self.game_selector.currentTextChanged.connect(self._on_game_change)
+        control_layout.addWidget(self.game_selector)
+        
+        # 窗口选择
+        win_label = QLabel("🖥️ 窗口选择")
+        win_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #333;")
+        control_layout.addWidget(win_label)
+        
+        win_select_layout = QHBoxLayout()
+        
+        self.window_selector = QComboBox()
+        self.window_selector.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+                padding: 6px;
+                min-width: 200px;
+            }
+        """)
+        win_select_layout.addWidget(self.window_selector)
+        
+        refresh_btn = QPushButton("🔄")
+        refresh_btn.setFixedSize(32, 32)
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34495e;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #2c3e50;
+            }
+        """)
+        refresh_btn.clicked.connect(self.refresh_window_list)
+        win_select_layout.addWidget(refresh_btn)
+        
+        control_layout.addLayout(win_select_layout)
+        
+        # 连接按钮
+        self.link_btn = QPushButton("🔗 锁定选中窗口")
+        self.link_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2980b9;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #3498db;
+            }
+        """)
+        self.link_btn.clicked.connect(self._link_selected_window)
+        control_layout.addWidget(self.link_btn)
+        
+        # 连接状态
+        self.link_status = QLabel("未连接")
+        self.link_status.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+        self.link_status.setAlignment(Qt.AlignCenter)
+        control_layout.addWidget(self.link_status)
+        
+        control_layout.addStretch()
+        layout.addWidget(control_frame)
+        
+        # ---- 右侧：投影仪和控制按钮 ----
+        projector_frame = QFrame()
+        projector_frame.setStyleSheet("background-color: transparent;")
+        projector_layout = QVBoxLayout(projector_frame)
+        projector_layout.setContentsMargins(0, 0, 0, 0)
+        projector_layout.setSpacing(10)
+        
+        # 投影仪标题
+        projector_title = QLabel("📽️ 投影仪")
+        projector_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #333;")
+        projector_layout.addWidget(projector_title)
+        
+        # 投影仪按钮
+        projector_btns = QHBoxLayout()
+        
+        self.btn_projector_game = QPushButton("🎮 游戏画面")
+        self.btn_projector_game.setCheckable(True)
+        self.btn_projector_game.setStyleSheet("""
+            QPushButton {
+                background-color: #90caf9;
+                color: #333;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #42a5f5;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #64b5f6;
+            }
+        """)
+        self.btn_projector_game.clicked.connect(lambda: self._toggle_projector("game"))
+        projector_btns.addWidget(self.btn_projector_game)
+        
+        self.btn_projector_log = QPushButton("🧠 思维流")
+        self.btn_projector_log.setCheckable(True)
+        self.btn_projector_log.setStyleSheet("""
+            QPushButton {
+                background-color: #90caf9;
+                color: #333;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #42a5f5;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #64b5f6;
+            }
+        """)
+        self.btn_projector_log.clicked.connect(lambda: self._toggle_projector("log"))
+        projector_btns.addWidget(self.btn_projector_log)
+        
+        projector_layout.addLayout(projector_btns)
+        
+        # 控制按钮
+        control_btns = QHBoxLayout()
+        
+        self.btn_start = QPushButton("▶ 启动代理")
+        self.btn_start.setEnabled(False)
+        self.btn_start.setStyleSheet("""
+            QPushButton {
+                background-color: #4caf50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #888888;
+            }
+        """)
+        self.btn_start.clicked.connect(self._start_agent)
+        control_btns.addWidget(self.btn_start)
+        
+        self.btn_stop = QPushButton("⏹ 停止")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #888888;
+            }
+        """)
+        self.btn_stop.clicked.connect(self._stop_agent)
+        control_btns.addWidget(self.btn_stop)
+        
+        self.btn_config = QPushButton("⚙️ 配置")
+        self.btn_config.setStyleSheet("""
+            QPushButton {
+                background-color: #2196f3;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0b7dda;
+            }
+        """)
+        self.btn_config.clicked.connect(self._show_settings)
+        control_btns.addWidget(self.btn_config)
+        
+        projector_layout.addLayout(control_btns)
+        projector_layout.addStretch()
+        
+        layout.addWidget(projector_frame)
+    
+    def _create_floating_windows(self):
+        """创建悬浮窗口"""
+        # 游戏画面窗口
+        self.win_game = DraggableWindow("🎮 游戏画面", self)
+        self.win_game.setGeometry(50, 50, 640, 480)
+        self.win_game.hide()
+        
+        # 设置游戏窗口内容
+        self._setup_game_window()
+        
+        # 日志窗口
+        self.win_log = DraggableWindow("🧠 思维流", self)
+        self.win_log.setGeometry(720, 50, 500, 400)
+        self.win_log.hide()
+        
+        # 设置日志窗口内容
+        self._setup_log_window()
+    
+    def _setup_game_window(self):
+        """设置游戏窗口内容"""
+        content = self.win_game.get_content_widget()
+        layout = self.win_game.get_content_layout()
+        
+        # 工具栏
+        toolbar = QFrame()
+        toolbar.setFixedHeight(40)
+        toolbar.setStyleSheet("background-color: #2d2d2d; border-bottom: 1px solid #404040;")
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(10, 0, 10, 0)
+        
+        label = QLabel("👁️ 实时视觉 (Live Vision)")
+        label.setStyleSheet("color: #cccccc; font-size: 12px; font-weight: bold;")
+        toolbar_layout.addWidget(label)
+        
+        toolbar_layout.addStretch()
+        
+        self.view_mode = QComboBox()
+        self.view_mode.addItems(["原始画面", "SoM网格", "UI匹配"])
+        self.view_mode.setStyleSheet("""
+            QComboBox {
+                background-color: #3d3d3d;
+                color: #cccccc;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 4px;
+            }
+        """)
+        self.view_mode.currentTextChanged.connect(self._change_view_mode)
+        toolbar_layout.addWidget(self.view_mode)
+        
+        layout.addWidget(toolbar)
+        
+        # 图像显示区域
+        self.image_container = QFrame()
+        self.image_container.setStyleSheet("background-color: #1a1a1a;")
+        image_layout = QVBoxLayout(self.image_container)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.preview_label = QLabel("请在控制台选择窗口并连接...")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setStyleSheet("color: #808080; font-size: 14px;")
+        image_layout.addWidget(self.preview_label)
+        
+        layout.addWidget(self.image_container, 1)
+    
+    def _setup_log_window(self):
+        """设置日志窗口内容"""
+        content = self.win_log.get_content_widget()
+        layout = self.win_log.get_content_layout()
+        
+        # 创建日志面板
+        self.log_panel = LogPanel()
+        layout.addWidget(self.log_panel)
+    
+    def _connect_signals(self):
+        """连接信号"""
+        # 连接日志信号
+        log_signals.log_received.connect(self._on_log_received)
+        log_signals.image_received.connect(self._on_image_received)
+    
+    # ========================================================================
+    # 槽函数
+    # ========================================================================
+    
+    @Slot(dict)
+    def _on_log_received(self, log_data: dict):
+        """接收日志信号"""
+        self.log_panel.add_log(log_data)
+        # 同时写入日志文件
+        write_log(log_data)
+    
+    @Slot(np.ndarray)
+    def _on_image_received(self, img_array: np.ndarray):
+        """接收图像信号"""
+        self._update_preview(img_array)
+    
+    def _toggle_projector(self, projector_type: str):
+        """切换投影仪状态"""
+        self.projector_states[projector_type] = not self.projector_states[projector_type]
+        
+        if projector_type == "game":
+            if self.projector_states[projector_type]:
+                self.win_game.show()
+                self._add_log("游戏投影仪已开启", type="SYSTEM")
+            else:
+                self.win_game.hide()
+                self._add_log("游戏投影仪已关闭", type="SYSTEM")
+        elif projector_type == "log":
+            if self.projector_states[projector_type]:
+                self.win_log.show()
+                self._add_log("日志投影仪已开启", type="SYSTEM")
+            else:
+                self.win_log.hide()
+                self._add_log("日志投影仪已关闭", type="SYSTEM")
+        
+        # 更新提示标签
+        if not any(self.projector_states.values()):
+            self.projection_hint.show()
+        else:
+            self.projection_hint.hide()
+    
+    def _link_selected_window(self):
+        """连接选中的窗口"""
+        selected_name = self.window_selector.currentText()
+        if selected_name not in self.window_map:
+            self._add_log("无效的窗口选择", type="ERROR")
+            return
+        
+        target_hwnd = self.window_map[selected_name]
+        
+        if self.game_window_driver.init_hwnd(target_hwnd):
+            title = self.game_window_driver.window_title
+            self.link_status.setText(f"✅ 已连接: {title[:15]}...")
+            self.link_status.setStyleSheet("color: #2ecc71; font-size: 11px;")
+            self.btn_start.setEnabled(True)
+            self._add_log(f"成功锁定: {title}", type="SYSTEM")
+            self.link_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #27ae60;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+            """)
+            # 测试截图
+            self._test_snapshot()
+        else:
+            self.link_status.setText("❌ 连接失败")
+            self.link_status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+            self._add_log("无法绑定该窗口句柄", type="ERROR")
+    
+    def _start_agent(self):
+        """启动代理"""
+        if not self.game_window_driver.hwnd:
+            self._add_log("窗口句柄丢失，请重新连接", type="ERROR")
+            return
+        
+        self._add_log("正在启动智能代理...", type="SYSTEM")
+        
+        success = self.agent.start(window_title=None)
+        if success:
+            self.btn_start.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.window_selector.setEnabled(False)
+            self.link_btn.setEnabled(False)
+        else:
+            self.btn_start.setEnabled(True)
+    
+    def _stop_agent(self):
+        """停止代理"""
+        self.agent.stop()
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.window_selector.setEnabled(True)
+        self.link_btn.setEnabled(True)
+        self._add_log("代理已停止", type="SYSTEM")
+    
+    def _change_view_mode(self, value: str):
+        """切换视图模式"""
+        self._add_log(f"切换视觉模式: {value}", type="SYSTEM")
+    
+    def _on_game_change(self, choice: str):
+        """游戏变更"""
+        if choice and choice != "无配置文件":
+            self.knowledge_base.load_game(choice)
+            self._add_log(f"已加载知识库: {choice}", type="SYSTEM")
+    
+    def _show_settings(self):
+        """显示设置对话框"""
+        dialog = SettingsDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            self._add_log("系统配置已更新", type="SYSTEM")
+    
+    def _update_preview(self, img_array: np.ndarray):
+        """更新预览图像"""
+        try:
+            # 转换 numpy 数组为 QImage
+            if len(img_array.shape) == 3:
+                height, width, channels = img_array.shape
+                bytes_per_line = channels * width
+                q_image = QImage(img_array.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            else:
+                height, width = img_array.shape
+                bytes_per_line = width
+                q_image = QImage(img_array.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
+            
+            pixmap = QPixmap.fromImage(q_image)
+            
+            # 缩放以适应容器
+            container_size = self.image_container.size()
+            scaled_pixmap = pixmap.scaled(
+                container_size - QSize(20, 20),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            
+            self.preview_label.setPixmap(scaled_pixmap)
+            self.preview_label.setText("")
+            
+        except Exception as e:
+            print(f"Preview Error: {e}")
+    
+    def _test_snapshot(self):
+        """测试截图"""
+        import time
+        start_time = time.time()
+        img = self.game_window_driver.snapshot()
+        performance_monitor.record_snapshot(time.time() - start_time)
+        if img is not None:
+            self._update_preview(img)
+            self._add_log("视觉信号接入正常", type="VISION")
+        else:
+            self._add_log("窗口连接成功，但画面黑屏或受保护", type="ERROR")
+    
+    def _add_log(self, text: str, detail: str = "", type: str = "SYSTEM"):
+        """添加日志"""
+        log_data = {"title": text, "detail": detail, "type": type, "time": datetime.now().timestamp()}
+        log_signals.log_received.emit(log_data)
+    
+    # ========================================================================
+    # 公共方法
+    # ========================================================================
+    
+    def refresh_window_list(self):
+        """刷新窗口列表"""
+        windows = self.game_window_driver.get_all_windows()
+        self.window_map = {}
+        display_list = []
+        
+        if not windows:
+            display_list = ["未发现窗口"]
+        else:
+            for hwnd, title in windows:
+                display_name = f"{title} [{hwnd}]"
+                if len(display_name) > 40:
+                    display_name = display_name[:37] + "..."
+                self.window_map[display_name] = hwnd
+                display_list.append(display_name)
+        
+        self.window_selector.clear()
+        self.window_selector.addItems(display_list)
+        
+        self._add_log(f"已扫描到 {len(windows)} 个窗口", type="SYSTEM")
+    
+    def refresh_game_list(self):
+        """刷新游戏列表"""
+        games = self.knowledge_base.list_games()
+        self.game_selector.clear()
+        if games:
+            self.game_selector.addItems(games)
+        else:
+            self.game_selector.addItem("无配置文件")
+    
+    def closeEvent(self, event):
+        """关闭事件"""
+        self.agent.stop()
+        # 停止性能监控并生成报告
+        report = performance_monitor.stop_monitoring()
+        if report:
+            self._add_log("性能监控报告已生成", detail=report[:500], type="SYSTEM")
+        # 关闭日志文件
+        logger.close()
+        event.accept()
+
+
+# ============================================================================
+# 资源管理器类
 # ============================================================================
 
 class AssetManager:
-    """
-    资源加载器：管理图片资源，当图片不存在时自动生成占位图
-    """
+    """资源管理器 - 管理图片资源"""
+    
     def __init__(self):
         self.assets_dir = "assets"
         if not os.path.exists(self.assets_dir):
             os.makedirs(self.assets_dir)
         
-        # 预定义所有需要的图片
         self.required_assets = {
             "bg_curtain": os.path.join(self.assets_dir, "bg_curtain.png"),
             "bg_console": os.path.join(self.assets_dir, "bg_console.png"),
@@ -58,903 +1259,71 @@ class AssetManager:
             "btn_config": os.path.join(self.assets_dir, "btn_config.png"),
         }
         
-        # 生成所有占位图
         self.generate_placeholders()
     
     def generate_placeholders(self):
-        """生成所有占位图片"""
+        """生成占位图片"""
         for name, path in self.required_assets.items():
             if not os.path.exists(path):
                 self._create_placeholder(path, name)
     
     def _create_placeholder(self, path, name):
         """创建单个占位图片"""
-        # 根据名称生成不同颜色的占位图
         color_map = {
-            "bg_curtain": (200, 200, 200),  # 灰色幕布
-            "bg_console": (240, 240, 240),  # 白色控制台
-            "avatar_placeholder": (180, 210, 240),  # 蓝色看板娘位置
-            "projector_off": (120, 120, 120),  # 灰色投影仪（关闭）
-            "projector_on": (100, 200, 100),  # 绿色投影仪（开启）
-            "btn_start": (50, 200, 50),  # 绿色开始按钮
-            "btn_stop": (200, 50, 50),  # 红色停止按钮
-            "btn_config": (50, 150, 200),  # 蓝色配置按钮
+            "bg_curtain": (200, 200, 200),
+            "bg_console": (240, 240, 240),
+            "avatar_placeholder": (180, 210, 240),
+            "projector_off": (120, 120, 120),
+            "projector_on": (100, 200, 100),
+            "btn_start": (50, 200, 50),
+            "btn_stop": (200, 50, 50),
+            "btn_config": (50, 150, 200),
         }
         
         color = color_map.get(name, (200, 200, 200))
         
-        # 根据名称设置不同的尺寸
         size_map = {
-            "bg_curtain": (1280, 600),  # 幕布背景
-            "bg_console": (1280, 200),  # 控制台背景
-            "avatar_placeholder": (200, 200),  # 看板娘
-            "projector_off": (80, 80),  # 投影仪
-            "projector_on": (80, 80),  # 投影仪
-            "btn_start": (60, 60),  # 按钮
-            "btn_stop": (60, 60),  # 按钮
-            "btn_config": (60, 60),  # 按钮
+            "bg_curtain": (1280, 600),
+            "bg_console": (1280, 200),
+            "avatar_placeholder": (200, 200),
+            "projector_off": (80, 80),
+            "projector_on": (80, 80),
+            "btn_start": (60, 60),
+            "btn_stop": (60, 60),
+            "btn_config": (60, 60),
         }
         
         size = size_map.get(name, (100, 100))
         
-        # 创建占位图
         img = Image.new("RGB", size, color)
         img.save(path)
     
     def get_asset(self, name):
         """获取资源路径"""
         return self.required_assets.get(name, None)
-    
-    def get_image(self, name, size=None):
-        """获取图片对象"""
-        path = self.get_asset(name)
-        if not path or not os.path.exists(path):
-            return None
-        
-        try:
-            img = Image.open(path)
-            if size:
-                img = img.resize(size)
-            return img
-        except Exception:
-            return None
-    
-    def get_ctk_image(self, name, size=None):
-        """获取CTkImage对象"""
-        img = self.get_image(name, size)
-        if img:
-            return ctk.CTkImage(light_image=img, dark_image=img, size=size if size else img.size)
-        return None
+
 
 # ============================================================================
-# 核心组件类 - DraggableWindow
+# 程序入口
 # ============================================================================
 
-class DraggableWindow(ctk.CTkFrame):
-    """
-    可拖拽、可缩放、可堆叠、可透明的悬浮窗口组件
-    """
-    def __init__(self, master, title="Window", width=400, height=300, start_x=100, start_y=100, **kwargs):
-        super().__init__(master, width=width, height=height, corner_radius=10, border_width=1, border_color="#555555", **kwargs)
-        
-        # 禁止 Pack 布局管理器自动调整窗口大小
-        self.pack_propagate(False)
-        
-        # 窗口属性
-        self.title = title
-        self.is_dragging = False
-        self.is_resizing = False
-        self.start_x = 0
-        self.start_y = 0
-        self.start_width = width
-        self.start_height = height
-        self.min_width = 200
-        self.min_height = 150
-        self.current_x = start_x
-        self.current_y = start_y
-        self.is_transparent = False
-        
-        # 设置绝对定位
-        self.place(x=self.current_x, y=self.current_y)
-        self.lift()  # 初始化时置顶
-        
-        # 创建窗口内容
-        self.create_widgets()
-        
-        # 绑定事件
-        self.bind_events()
+def main():
+    # 启用 High-DPI 支持
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    QGuiApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QGuiApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     
-    def create_widgets(self):
-        """创建窗口组件"""
-        # 内容容器（填满整个窗口）
-        self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.content_frame.pack(fill="both", expand=True, padx=5, pady=5)
+    app = QApplication(sys.argv)
     
-    def bind_events(self):
-        """绑定鼠标事件"""
-        # 鼠标中键拖拽：移动窗口位置
-        self.bind("<Button-2>", self.on_drag_start)
-        self.bind("<B2-Motion>", self.on_drag_motion)
-        self.content_frame.bind("<Button-2>", self.on_drag_start)
-        self.content_frame.bind("<B2-Motion>", self.on_drag_motion)
-        
-        # 鼠标左键：调整窗口大小（整个窗口区域）
-        self.bind("<Button-1>", self.on_resize_start)
-        self.bind("<B1-Motion>", self.on_resize_motion)
-        self.content_frame.bind("<Button-1>", self.on_resize_start)
-        self.content_frame.bind("<B1-Motion>", self.on_resize_motion)
-        
-        # 释放事件
-        self.bind("<ButtonRelease-1>", self.on_release)
-        self.bind("<ButtonRelease-2>", self.on_release)
+    # 应用深色主题
+    if qdarktheme:
+        qdarktheme.setup_theme("dark")
     
-    def on_drag_start(self, event):
-        """开始拖拽"""
-        self.is_dragging = True
-        self.start_x = event.x_root
-        self.start_y = event.y_root
-        self.lift()  # 点击时置顶
+    window = AICmdCenter()
+    window.show()
     
-    def on_drag_motion(self, event):
-        """拖拽中"""
-        if not self.is_dragging:
-            return
-        
-        # 计算移动距离
-        delta_x = event.x_root - self.start_x
-        delta_y = event.y_root - self.start_y
-        
-        # 获取当前位置
-        x = self.winfo_x() + delta_x
-        y = self.winfo_y() + delta_y
-        
-        # 边界限制
-        if self.master:
-            master_width = self.master.winfo_width()
-            master_height = self.master.winfo_height()
-            window_width = self.winfo_width()
-            window_height = self.winfo_height()
-            
-            # 确保窗口至少保留50px在可视区域内
-            x = max(0, min(x, master_width - 50))
-            y = max(0, min(y, master_height - 50))
-        
-        # 更新位置
-        self.place_configure(x=x, y=y)
-        self.current_x = x
-        self.current_y = y
-        
-        # 更新起始点
-        self.start_x = event.x_root
-        self.start_y = event.y_root
-    
-    def on_resize_start(self, event):
-        """开始缩放：记录初始状态"""
-        self.is_resizing = True
-        # 记录鼠标在屏幕上的绝对位置
-        self.resize_start_mouse_x = event.x_root
-        self.resize_start_mouse_y = event.y_root
-        # 记录窗口当前的尺寸
-        self.resize_start_w = self.winfo_width()
-        self.resize_start_h = self.winfo_height()
-        self.lift()  # 置顶
-    
-    def on_resize_motion(self, event):
-        """缩放中：计算增量并应用"""
-        if not self.is_resizing:
-            return
-        
-        # 1. 计算鼠标移动了多少像素 (Delta)
-        delta_x = event.x_root - self.resize_start_mouse_x
-        delta_y = event.y_root - self.resize_start_mouse_y
-        
-        # 2. 新尺寸 = 旧尺寸 + 移动量
-        new_width = self.resize_start_w + delta_x
-        new_height = self.resize_start_h + delta_y
-        
-        # 3. 限制最小尺寸
-        new_width = max(self.min_width, new_width)
-        new_height = max(self.min_height, new_height)
-        
-        # 4. 边界限制（防止超出父容器）
-        if self.master:
-            parent_w = self.master.winfo_width()
-            parent_h = self.master.winfo_height()
-            # 确保不超出右边界
-            if self.winfo_x() + new_width > parent_w:
-                new_width = parent_w - self.winfo_x()
-            # 确保不超出下边界
-            if self.winfo_y() + new_height > parent_h:
-                new_height = parent_h - self.winfo_y()
-        
-        # 5. 应用尺寸
-        self.configure(width=new_width, height=new_height)
-    
-    def on_release(self, event):
-        """释放鼠标"""
-        self.is_dragging = False
-        self.is_resizing = False
-    
-    def show(self):
-        """显示窗口"""
-        self.lift()
-        self.place(x=self.current_x, y=self.current_y)
-    
-    def hide(self):
-        """隐藏窗口"""
-        # 保存当前位置
-        if self.winfo_ismapped():
-            self.current_x = self.winfo_x()
-            self.current_y = self.winfo_y()
-        self.place_forget()
-    
-    def toggle(self):
-        """切换显示/隐藏状态"""
-        if self.winfo_ismapped():
-            self.hide()
-        else:
-            self.show()
-    
-    def get_content_frame(self):
-        """获取内容容器"""
-        return self.content_frame
+    sys.exit(app.exec())
 
-# ============================================================================
-# 辅助组件类定义 (设置弹窗、日志卡片、日志面板)
-# ============================================================================
-
-class SettingsDialog(ctk.CTkToplevel):
-    """设置弹窗：用于配置 API Key 和 模型参数"""
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.config = ConfigManager()
-        self.title("系统配置 (Settings)")
-        self.geometry("500x450")
-        self.resizable(False, False)
-        self.attributes("-topmost", True)
-        
-        # 居中显示
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - 250
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - 225
-        self.geometry(f"+{x}+{y}")
-
-        self.create_widgets()
-        self.load_current_config()
-
-    def create_widgets(self):
-        ctk.CTkLabel(self, text="AI 模型配置", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(20, 10))
-        self.form_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.form_frame.pack(fill="both", expand=True, padx=30)
-
-        # API Key
-        ctk.CTkLabel(self.form_frame, text="API Key:", anchor="w").pack(fill="x", pady=(10, 0))
-        self.entry_key = ctk.CTkEntry(self.form_frame, placeholder_text="sk-xxxxxxxx", show="*")
-        self.entry_key.pack(fill="x", pady=5)
-        
-        self.show_key = ctk.CTkCheckBox(self.form_frame, text="显示 API Key", command=self.toggle_key_visibility, font=ctk.CTkFont(size=12))
-        self.show_key.pack(anchor="w", pady=(0, 10))
-
-        # Endpoint ID
-        ctk.CTkLabel(self.form_frame, text="Endpoint ID (火山引擎节点号):", anchor="w").pack(fill="x", pady=(10, 0))
-        self.entry_endpoint = ctk.CTkEntry(self.form_frame, placeholder_text="ep-2024xxxx-xxxxx")
-        self.entry_endpoint.pack(fill="x", pady=5)
-
-        # Model Name
-        ctk.CTkLabel(self.form_frame, text="Model Name (模型名称):", anchor="w").pack(fill="x", pady=(10, 0))
-        self.entry_model = ctk.CTkOptionMenu(self.form_frame, values=["doubao-pro-4k", "doubao-lite-4k", "gpt-4o", "custom"])
-        self.entry_model.pack(fill="x", pady=5)
-
-        # 按钮
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=30, pady=20, side="bottom")
-        ctk.CTkButton(btn_frame, text="💾 保存配置", fg_color="#27ae60", hover_color="#2ecc71", command=self.save_config).pack(fill="x")
-
-    def toggle_key_visibility(self):
-        if self.show_key.get():
-            self.entry_key.configure(show="")
-        else:
-            self.entry_key.configure(show="*")
-
-    def load_current_config(self):
-        self.entry_key.insert(0, self.config.get("ai.api_key", ""))
-        self.entry_endpoint.insert(0, self.config.get("ai.endpoint_id", ""))
-        self.entry_model.set(self.config.get("ai.model", "doubao-pro-4k"))
-
-    def save_config(self):
-        self.config.set("ai.api_key", self.entry_key.get().strip())
-        self.config.set("ai.endpoint_id", self.entry_endpoint.get().strip())
-        self.config.set("ai.model", self.entry_model.get())
-        self.parent.add_log("系统配置已更新", type="SYSTEM")
-        self.destroy()
-
-class CoTLogCard(ctk.CTkFrame):
-    """
-    思维链日志卡片 (Chain of Thought Log Card) - V2.0 交互增强版
-    特性：全标题点击展开、深色详情背景、紧凑布局
-    """
-    COLORS = {
-        "THOUGHT": "#9b59b6", # 紫色
-        "VISION": "#3498db",  # 蓝色
-        "ACTION": "#2ecc71",  # 绿色
-        "SYSTEM": "#95a5a6",  # 灰色
-        "ERROR": "#e74c3c",   # 红色
-        "WARNING": "#f39c12"  # 橙色
-    }
-    ICONS = {
-        "THOUGHT": "🧠", "VISION": "👁️", "ACTION": "🖱️", 
-        "SYSTEM": "⚙️", "ERROR": "❌", "WARNING": "⚠️"
-    }
-
-    def __init__(self, master, log_data: dict, **kwargs):
-        # 初始化 Frame，默认背景色即为标题栏颜色
-        super().__init__(master, fg_color="#2b2b2b", corner_radius=6, **kwargs)
-        
-        # --- 1. 数据解析 ---
-        raw_type = log_data.get("type", "SYSTEM")
-        self.type = raw_type.upper() if raw_type else "SYSTEM"
-        self.title = log_data.get("title", log_data.get("text", "Info"))
-        self.detail = log_data.get("detail", "")
-        
-        ts = log_data.get("time", time.time())
-        self.timestamp = time.strftime("%H:%M:%S", time.localtime(ts))
-        
-        self.is_expanded = False
-        self.accent_color = self.COLORS.get(self.type, "#95a5a6")
-        self.icon = self.ICONS.get(self.type, "📝")
-
-        # --- 2. 标题栏区域 (Header) ---
-        # 创建一个内部 Frame 作为标题栏，方便绑定点击事件
-        self.header_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=6)
-        self.header_frame.pack(fill="x", ipadx=5, ipady=5) # ipad 增加内部点击区域，但不增加视觉高度
-        
-        # 左侧彩色指示条
-        self.bar = ctk.CTkFrame(self.header_frame, width=4, height=20, fg_color=self.accent_color)
-        self.bar.pack(side="left", padx=(5, 5))
-
-        # 时间戳
-        self.time_label = ctk.CTkLabel(
-            self.header_frame, 
-            text=f"[{self.timestamp}]", 
-            text_color="#7f8c8d", 
-            font=ctk.CTkFont(family="Consolas", size=10)
-        )
-        self.time_label.pack(side="left", padx=(0, 5))
-
-        # 标题文本
-        title_text = f"{self.icon} {self.title}"
-        self.info_label = ctk.CTkLabel(
-            self.header_frame, 
-            text=title_text, 
-            font=ctk.CTkFont(size=12, weight="bold"), 
-            anchor="w", 
-            text_color="#ecf0f1"
-        )
-        self.info_label.pack(side="left", fill="x", expand=True)
-
-        # 展开/折叠 指示图标
-        if self.detail:
-            self.arrow_label = ctk.CTkLabel(
-                self.header_frame, 
-                text="▶", # 初始向右
-                width=20, 
-                text_color="#7f8c8d", 
-                font=ctk.CTkFont(size=10)
-            )
-            self.arrow_label.pack(side="right", padx=5)
-
-        # --- 3. 详情区域 (Detail) - 初始隐藏 ---
-        if self.detail:
-            # 详情容器：背景更深
-            self.detail_frame = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=0)
-            
-            # 详情文本框
-            self.detail_text = ctk.CTkTextbox(
-                self.detail_frame,
-                fg_color="transparent", # 透明背景，透出 Frame 的深色
-                text_color="#bdc3c7",
-                font=ctk.CTkFont(family="Consolas", size=11),
-                activate_scrollbars=False,
-                height=0 # 初始高度
-            )
-            self.detail_text.insert("0.0", str(self.detail))
-            self.detail_text.configure(state="disabled") # 只读
-            self.detail_text.pack(fill="x", padx=10, pady=5)
-
-            # --- 4. 关键：全区域点击绑定 ---
-            # 绑定 Header 及其所有子控件，确保点击任何位置都能触发
-            self._bind_click_event(self.header_frame)
-
-    def _bind_click_event(self, widget):
-        """递归绑定点击事件"""
-        widget.bind("<Button-1>", self.toggle_expand)
-        for child in widget.winfo_children():
-            self._bind_click_event(child)
-
-    def toggle_expand(self, event=None):
-        """切换展开/折叠状态"""
-        if not self.detail: return
-        
-        self.is_expanded = not self.is_expanded
-        
-        if self.is_expanded:
-            # 1. 改变箭头方向
-            self.arrow_label.configure(text="▼")
-            # 2. 改变标题栏背景（可选，增加反馈感）
-            self.configure(fg_color="#353535") 
-            
-            # 3. 显示详情区
-            self.detail_frame.pack(fill="x", padx=2, pady=(0, 2))
-            
-            # 4. 动态计算高度
-            line_count = int(self.detail_text.index('end-1c').split('.')[0])
-            # 估算高度：行数 * 行高 + 缓冲
-            new_height = min(400, max(40, line_count * 18))
-            self.detail_text.configure(height=new_height, activate_scrollbars=True)
-            
-        else:
-            # 1. 恢复箭头
-            self.arrow_label.configure(text="▶")
-            # 2. 恢复标题栏背景
-            self.configure(fg_color="#2b2b2b")
-            
-            # 3. 隐藏详情区
-            self.detail_frame.pack_forget()
-class ThoughtStreamPanel(ctk.CTkFrame):
-    """日志流管理面板"""
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        self.log_history = []
-        self.current_filter = "ALL"
-        
-        self.toolbar = ctk.CTkFrame(self, height=40, fg_color="#2b2b2b", corner_radius=0)
-        self.toolbar.pack(fill="x", side="top")
-        
-        ctk.CTkLabel(self.toolbar, text="🧠 思维流", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10)
-        
-        self.filter_btn = ctk.CTkSegmentedButton(self.toolbar, values=["ALL", "THOUGHT", "VISION", "ACTION", "SYSTEM"], command=self.apply_filter, width=200, height=24, font=ctk.CTkFont(size=10))
-        self.filter_btn.set("ALL")
-        self.filter_btn.pack(side="right", padx=10, pady=8)
-
-        self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.scroll_frame.pack(fill="both", expand=True, padx=2, pady=2)
-        self.auto_scroll = True
-
-    def add_log(self, log_data):
-        if "time" not in log_data: log_data["time"] = time.time()
-        self.log_history.append(log_data)
-        if len(self.log_history) > 200: self.log_history.pop(0)
-        
-        current_type = log_data.get("type", "SYSTEM").upper()
-        if self.current_filter == "ALL" or self.current_filter == current_type:
-            self._render_card(log_data)
-
-    def _render_card(self, log_data):
-        card = CoTLogCard(self.scroll_frame, log_data)
-        card.pack(fill="x", pady=2, padx=5)
-        if self.auto_scroll:
-            self.update_idletasks()
-            self.scroll_frame._parent_canvas.yview_moveto(1.0)
-
-    def apply_filter(self, filter_type):
-        self.current_filter = filter_type
-        for widget in self.scroll_frame.winfo_children(): widget.destroy()
-        for log in self.log_history:
-            log_type = log.get("type", "SYSTEM").upper()
-            if filter_type == "ALL" or filter_type == log_type: self._render_card(log)
-                
-    def clear(self):
-        self.log_history.clear()
-        for widget in self.scroll_frame.winfo_children(): widget.destroy()
-
-# ============================================================================
-# 主程序类 AICmdCenter - 全息投影控制台
-# ============================================================================
-
-class AICmdCenter(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        self.title("AI Game Agent - 全息投影控制台")
-        self.geometry("1280x800")
-        self.resizable(True, True)
-        
-        # 核心模块初始化
-        self.config_manager = ConfigManager()
-        self.knowledge_base = KnowledgeBase()
-        self.ui_queue = queue.Queue()
-        self.asset_manager = AssetManager()
-        
-        self.game_window_driver = GameWindow() 
-        self.agent = SmartAgent(ui_queue=self.ui_queue, game_window=self.game_window_driver)
-        
-        # 启动性能监控
-        performance_monitor.start_monitoring()
-        
-        # 窗口映射字典
-        self.window_map = {}
-        
-        # 投影仪状态
-        self.projector_states = {
-            "game": False,
-            "log": False
-        }
-
-        # 创建分层背景
-        self.create_background()
-        
-        # 创建悬浮窗口
-        self.create_floating_windows()
-        
-        # 创建控制台区域
-        self.create_console()
-        
-        self.running = True
-        self.log_thread = threading.Thread(target=self.process_ui_queue, daemon=True)
-        self.log_thread.start()
-        
-        # 初始加载
-        self.refresh_game_list()
-        self.refresh_window_list() # 自动扫描一次窗口
-
-    def create_background(self):
-        """创建分层背景"""
-        # Layer 0: 底图（灰色幕布 + 白色控制台）
-        self.bg_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.bg_frame.pack(fill="both", expand=True)
-        
-        # 灰色幕布（投影区）
-        self.curtain_frame = ctk.CTkFrame(self.bg_frame, height=600, fg_color="#e0e0e0")
-        self.curtain_frame.pack(fill="x", side="top")
-        self.curtain_frame.pack_propagate(False)
-        
-        # 白色控制台桌面
-        self.console_frame = ctk.CTkFrame(self.bg_frame, height=200, fg_color="#f5f5f5")
-        self.console_frame.pack(fill="x", side="bottom")
-        self.console_frame.pack_propagate(False)
-
-    def create_floating_windows(self):
-        """创建悬浮窗口"""
-        # 游戏画面窗口
-        self.win_game = DraggableWindow(self.curtain_frame, title="🎮 游戏画面", width=640, height=480, start_x=20, start_y=20)
-        self.win_game.hide()
-        
-        # 日志窗口
-        self.win_log = DraggableWindow(self.curtain_frame, title="🧠 思维流", width=500, height=400, start_x=680, start_y=20)
-        self.win_log.hide()
-        
-        # 填充游戏窗口内容
-        self.setup_game_window()
-        
-        # 填充日志窗口内容
-        self.setup_log_window()
-
-    def setup_game_window(self):
-        """设置游戏窗口内容"""
-        content_frame = self.win_game.get_content_frame()
-        
-        # 工具栏
-        tools = ctk.CTkFrame(content_frame, height=40, fg_color="#2b2b2b")
-        tools.pack(fill="x", side="top")
-        ctk.CTkLabel(tools, text=" 👁️ 实时视觉 (Live Vision) ", font=("Arial", 12, "bold")).pack(side="left", padx=10)
-        self.view_mode = ctk.CTkSegmentedButton(tools, values=["原始画面", "SoM网格", "UI匹配"], command=self.change_view_mode)
-        self.view_mode.set("原始画面")
-        self.view_mode.pack(side="right", padx=10, pady=5)
-
-        # 图像容器
-        self.image_container = ctk.CTkFrame(content_frame, fg_color="transparent")
-        self.image_container.pack(fill="both", expand=True, padx=10, pady=10)
-        self.preview_label = ctk.CTkLabel(self.image_container, text="请在控制台选择窗口并连接...", text_color="gray")
-        self.preview_label.pack(fill="both", expand=True)
-
-    def setup_log_window(self):
-        """设置日志窗口内容"""
-        content_frame = self.win_log.get_content_frame()
-        
-        # 创建思维流面板
-        self.thought_panel = ThoughtStreamPanel(content_frame, fg_color="transparent")
-        self.thought_panel.pack(fill="both", expand=True)
-
-    def create_console(self):
-        """创建控制台区域"""
-        # 1. 左侧：看板娘位置
-        self.avatar_frame = ctk.CTkFrame(self.console_frame, width=200, height=180, fg_color="#e3f2fd")
-        self.avatar_frame.place(x=20, y=10)
-        
-        avatar_img = self.asset_manager.get_ctk_image("avatar_placeholder", size=(180, 180))
-        self.avatar_label = ctk.CTkLabel(self.avatar_frame, image=avatar_img, text="")
-        self.avatar_label.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # 2. 中间：游戏配置和窗口选择
-        self.control_panel = ctk.CTkFrame(self.console_frame, width=400, height=180, fg_color="transparent")
-        self.control_panel.place(x=240, y=10)
-        
-        # 游戏配置选择
-        ctk.CTkLabel(self.control_panel, text="🎮 游戏配置", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
-        self.game_selector = ctk.CTkOptionMenu(self.control_panel, dynamic_resizing=False, command=self.on_game_change)
-        self.game_selector.pack(fill="x", padx=10, pady=(0, 10))
-        
-        # 窗口连接器
-        ctk.CTkLabel(self.control_panel, text="🖥️ 窗口选择", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
-        
-        # 容器：放置下拉框和刷新按钮
-        win_select_frame = ctk.CTkFrame(self.control_panel, fg_color="transparent")
-        win_select_frame.pack(fill="x", padx=10, pady=0)
-        
-        self.window_selector = ctk.CTkOptionMenu(
-            win_select_frame, 
-            dynamic_resizing=False,
-            values=["请点击刷新..."],
-            width=250 
-        )
-        self.window_selector.pack(side="left", fill="x", expand=True)
-        
-        self.btn_refresh_win = ctk.CTkButton(
-            win_select_frame, text="🔄", width=30, fg_color="#34495e", 
-            command=self.refresh_window_list
-        )
-        self.btn_refresh_win.pack(side="right", padx=(5, 0))
-        
-        self.btn_link = ctk.CTkButton(
-            self.control_panel, text="🔗 锁定选中窗口", fg_color="#2980b9", 
-            command=self.link_selected_window
-        )
-        self.btn_link.pack(fill="x", padx=10, pady=5)
-        
-        self.lbl_link_status = ctk.CTkLabel(self.control_panel, text="未连接", text_color="gray", font=("Arial", 11))
-        self.lbl_link_status.pack(padx=10, pady=2)
-        
-        # 3. 右侧：投影仪和控制按钮
-        self.projector_panel = ctk.CTkFrame(self.console_frame, width=500, height=180, fg_color="transparent")
-        self.projector_panel.place(x=660, y=10)
-        
-        # 投影仪标题
-        ctk.CTkLabel(self.projector_panel, text="📽️ 投影仪", font=("Arial", 12, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
-        
-        # 投影仪按钮容器
-        projector_btns_frame = ctk.CTkFrame(self.projector_panel, fg_color="transparent")
-        projector_btns_frame.pack(fill="x", padx=10, pady=5)
-        
-        # 游戏投影仪
-        self.btn_projector_game = ctk.CTkButton(
-            projector_btns_frame, 
-            text="🎮 游戏画面", 
-            fg_color="#90caf9", 
-            hover_color="#64b5f6",
-            width=150,
-            command=lambda: self.toggle_projector("game")
-        )
-        self.btn_projector_game.pack(side="left", padx=10)
-        
-        # 日志投影仪
-        self.btn_projector_log = ctk.CTkButton(
-            projector_btns_frame, 
-            text="🧠 思维流", 
-            fg_color="#90caf9", 
-            hover_color="#64b5f6",
-            width=150,
-            command=lambda: self.toggle_projector("log")
-        )
-        self.btn_projector_log.pack(side="left", padx=10)
-        
-        # 控制按钮容器
-        control_btns_frame = ctk.CTkFrame(self.projector_panel, fg_color="transparent")
-        control_btns_frame.pack(fill="x", padx=10, pady=10)
-        
-        # 开始按钮
-        self.btn_start = ctk.CTkButton(
-            control_btns_frame, 
-            text="▶ 启动代理", 
-            fg_color="#4caf50", 
-            hover_color="#45a049",
-            width=120,
-            state="disabled",
-            command=self.start_agent
-        )
-        self.btn_start.pack(side="left", padx=10)
-
-        # 停止按钮
-        self.btn_stop = ctk.CTkButton(
-            control_btns_frame, 
-            text="⏹ 停止", 
-            fg_color="#f44336", 
-            hover_color="#da190b",
-            width=120,
-            state="disabled",
-            command=self.stop_agent
-        )
-        self.btn_stop.pack(side="left", padx=10)
-
-        # 配置按钮
-        self.btn_config = ctk.CTkButton(
-            control_btns_frame, 
-            text="⚙️ 配置", 
-            fg_color="#2196f3", 
-            hover_color="#0b7dda",
-            width=120,
-            command=lambda: SettingsDialog(self)
-        )
-        self.btn_config.pack(side="left", padx=10)
-
-    def toggle_projector(self, projector_type):
-        """切换投影仪状态"""
-        self.projector_states[projector_type] = not self.projector_states[projector_type]
-        
-        if projector_type == "game":
-            if self.projector_states[projector_type]:
-                self.win_game.show()
-                self.add_log("游戏投影仪已开启", type="SYSTEM")
-            else:
-                self.win_game.hide()
-                self.add_log("游戏投影仪已关闭", type="SYSTEM")
-        elif projector_type == "log":
-            if self.projector_states[projector_type]:
-                self.win_log.show()
-                self.add_log("日志投影仪已开启", type="SYSTEM")
-            else:
-                self.win_log.hide()
-                self.add_log("日志投影仪已关闭", type="SYSTEM")
-
-    # --- 逻辑功能实现 ---
-
-    def refresh_window_list(self):
-        """刷新当前打开的窗口列表"""
-        windows = self.game_window_driver.get_all_windows()
-        self.window_map = {}
-        display_list = []
-        
-        if not windows:
-            display_list = ["未发现窗口"]
-        else:
-            for hwnd, title in windows:
-                # 构造唯一名称
-                display_name = f"{title} [{hwnd}]"
-                if len(display_name) > 30:
-                    display_name = display_name[:28] + "..."
-                self.window_map[display_name] = hwnd
-                display_list.append(display_name)
-        
-        self.window_selector.configure(values=display_list)
-        if display_list: self.window_selector.set(display_list[0])
-        
-        self.add_log(f"已扫描到 {len(windows)} 个窗口", type="SYSTEM")
-
-    def link_selected_window(self):
-        """连接下拉框中选中的窗口"""
-        selected_name = self.window_selector.get()
-        if selected_name not in self.window_map:
-            self.add_log("无效的窗口选择", type="ERROR")
-            return
-            
-        target_hwnd = self.window_map[selected_name]
-        
-        if self.game_window_driver.init_hwnd(target_hwnd):
-            title = self.game_window_driver.window_title
-            self.lbl_link_status.configure(text=f"✅ 已连接: {title[:10]}...", text_color="#2ecc71")
-            self.btn_start.configure(state="normal")
-            self.add_log(f"成功锁定: {title}", type="SYSTEM")
-            self.btn_link.configure(fg_color="#27ae60")
-            
-            # 测试截图
-            self.test_snapshot()
-        else:
-            self.lbl_link_status.configure(text="❌ 连接失败", text_color="#e74c3c")
-            self.add_log("无法绑定该窗口句柄", type="ERROR")
-
-    def refresh_game_list(self):
-        games = self.knowledge_base.list_games()
-        self.game_selector.configure(values=games if games else ["无配置文件"])
-        if games: self.game_selector.set(games[0])
-
-    def on_game_change(self, choice):
-        self.knowledge_base.load_game(choice)
-        self.add_log(f"已加载知识库: {choice}", type="SYSTEM")
-
-    def start_agent(self):
-        if not self.game_window_driver.hwnd:
-            self.add_log("窗口句柄丢失，请重新连接", type="ERROR")
-            return
-        self.add_log("正在启动智能代理...", type="SYSTEM")
-        
-        success = self.agent.start(window_title=None)
-        if success:
-            self.btn_start.configure(state="disabled")
-            self.btn_stop.configure(state="normal")
-            self.window_selector.configure(state="disabled")
-            self.btn_link.configure(state="disabled")
-        else:
-             self.btn_start.configure(state="normal")
-
-    def stop_agent(self):
-        self.agent.stop()
-        self.btn_start.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self.window_selector.configure(state="normal")
-        self.btn_link.configure(state="normal")
-        self.add_log("代理已停止", type="SYSTEM")
-
-    def change_view_mode(self, value):
-        self.add_log(f"切换视觉模式: {value}", type="SYSTEM")
-        # TODO: 传递给 vision_core 处理
-
-    def update_preview(self, img_array):
-        try:
-            # 将 numpy 数组转换为 PIL Image
-            img = Image.fromarray(img_array)
-            
-            # 获取容器尺寸
-            display_w = self.image_container.winfo_width()
-            display_h = self.image_container.winfo_height()
-            
-            # 防止窗口最小化或未渲染时除以零错误
-            if display_w < 10 or display_h < 10: 
-                return
-            
-            # 计算缩放比例
-            ratio = min(display_w / img.width, display_h / img.height)
-            new_size = (int(img.width * ratio), int(img.height * ratio))
-            
-            # 使用 CTkImage
-            ctk_img = ctk.CTkImage(
-                light_image=img,
-                dark_image=img,
-                size=new_size
-            )
-            
-            self.preview_label.configure(image=ctk_img, text="")
-            self.preview_label.image = ctk_img # 保持引用防止被垃圾回收
-            
-        except Exception as e: 
-            print(f"Preview Error: {e}")
-
-    def process_ui_queue(self):
-        while self.running:
-            try:
-                msg = self.ui_queue.get(timeout=0.1)
-                if "image" in msg: 
-                    try:
-                        self.after(0, self.update_preview, msg["image"])
-                    except Exception:
-                        pass
-                try:
-                    self.after(0, lambda: self.thought_panel.add_log(msg))
-                    # 同时写入日志文件
-                    write_log(msg)
-                except Exception:
-                    pass
-                self.ui_queue.task_done()
-            except queue.Empty: 
-                continue
-            except Exception:
-                # 捕获UI已销毁的异常
-                break
-            
-    def add_log(self, text, detail="", type="SYSTEM"):
-        # 将 key 从 "text" 改为 "title"，与 SmartAgent 保持一致
-        self.ui_queue.put({"title": text, "detail": detail, "type": type})
-    
-    def test_snapshot(self):
-        start_time = time.time()
-        img = self.game_window_driver.snapshot()
-        performance_monitor.record_snapshot(time.time() - start_time)
-        if img is not None:
-            self.update_preview(img)
-            self.add_log("视觉信号接入正常", type="VISION")
-        else:
-            self.add_log("窗口连接成功，但画面黑屏或受保护", type="ERROR")
-
-    def on_closing(self):
-        self.running = False
-        self.stop_agent()
-        # 停止性能监控并生成报告
-        report = performance_monitor.stop_monitoring()
-        if report:
-            self.add_log("性能监控报告已生成", detail=report[:500], type="SYSTEM")
-        # 关闭日志文件
-        logger.close()
-        self.destroy()
 
 if __name__ == "__main__":
-    app = AICmdCenter()
-    app.protocol("WM_DELETE_WINDOW", app.on_closing)
-    app.mainloop()
+    main()

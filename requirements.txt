@@ -8,5 +8,6 @@ pywin32
 numpy
 keyboard
 psutil
-customtkinter
 mss
+PySide6
+qdarktheme
