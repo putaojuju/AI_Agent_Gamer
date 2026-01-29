@@ -1,0 +1,173 @@
+/* ============================================================
+   AI Game Agent - Global Theme (Cyberpunk Dark)
+   ============================================================ */
+
+/* Global Settings */
+QWidget {
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    color: #ecf0f1;
+}
+
+QMainWindow {
+    background-color: #1a1a1a;
+}
+
+/* ============================================================
+   Draggable Window
+   ============================================================ */
+
+DraggableWindow {
+    background-color: transparent; /* Handled by Acrylic */
+    border: 1px solid rgba(80, 80, 80, 150);
+    border-radius: 8px;
+}
+
+#TitleBar {
+    background-color: rgba(45, 45, 45, 200);
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    border-bottom: 1px solid rgba(64, 64, 64, 150);
+}
+
+#TitleLabel {
+    color: #cccccc;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+#CloseButton {
+    background-color: transparent;
+    color: #999999;
+    border: none;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+#CloseButton:hover {
+    background-color: #e81123;
+    color: white;
+    border-radius: 4px;
+}
+
+#ContentArea {
+    background-color: transparent;
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+#SizeGrip {
+    background-color: #3498db;
+    width: 16px;
+    height: 16px;
+    border-bottom-right-radius: 6px;
+}
+
+/* ============================================================
+   Log Components
+   ============================================================ */
+
+LogCard {
+    background-color: rgba(43, 43, 43, 180);
+    border-radius: 6px;
+}
+
+LogCard:hover {
+    background-color: rgba(53, 53, 53, 200);
+    border: 1px solid #505050;
+}
+
+#LogTime {
+    color: #7f8c8d;
+    font-size: 10px;
+    font-family: Consolas, monospace;
+}
+
+#LogTitle {
+    color: #ecf0f1;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+#LogArrow {
+    color: #7f8c8d;
+    font-size: 10px;
+}
+
+#LogDetail {
+    background-color: rgba(26, 26, 26, 150);
+    color: #bdc3c7;
+    border: none;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+}
+
+#LogToolbar {
+    background-color: rgba(43, 43, 43, 200);
+    border-bottom: 1px solid #404040;
+}
+
+#LogPanelTitle {
+    color: #cccccc;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+#LogScrollArea {
+    background-color: transparent;
+    border: none;
+}
+
+/* Scrollbar Styling */
+QScrollBar:vertical {
+    background-color: rgba(43, 43, 43, 100);
+    width: 10px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #505050;
+    border-radius: 5px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #606060;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* ============================================================
+   Main Window Controls
+   ============================================================ */
+
+QComboBox {
+    background-color: #3d3d3d;
+    color: #cccccc;
+    border: 1px solid #505050;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QComboBox::drop-down {
+    border: none;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #3d3d3d;
+    color: #cccccc;
+    selection-background-color: #505050;
+}
+
+QPushButton {
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+/* Splitter */
+QSplitter::handle {
+    background-color: #404040;
+}

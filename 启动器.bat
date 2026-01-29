@@ -1,61 +1,80 @@
 @echo off
+setlocal EnableDelayedExpansion
+
+:: ============================================================
+:: AI Game Agent Launcher
+:: ============================================================
+
+title AI Game Agent Launcher
+color 0B
+
+cls
+echo.
+echo  ============================================================
+echo.
+echo    AI GAME AGENT - HOLOGRAPHIC CONSOLE
+echo.
+echo  ============================================================
+echo.
 
 :: Switch to the directory containing this batch file
 cd /d "%~dp0"
 
-:: Display startup information
-echo AI Game Agent Launcher
-echo --------------------
+:: 1. Environment Check
+echo  [*] Checking Environment...
+set CONDA_ENV=ai_agent_311
 
-:: Activate Conda environment
-echo Activating Conda environment (ai_agent_311)...
-call conda activate ai_agent_311
-
+conda run -n %CONDA_ENV% python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [WARNING] Failed to activate Conda environment.
-    echo Trying to use system Python...
-    set PYTHON_EXECUTABLE=python
-) else (
-    echo Conda environment activated successfully.
-    set PYTHON_EXECUTABLE=python
-)
-
-:: Check if Python is available
-%PYTHON_EXECUTABLE% --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python command not found.
-    echo Please ensure Python is installed and added to system PATH.
+    color 0C
+    echo.
+    echo  [ERROR] Python environment '%CONDA_ENV%' not found!
+    echo.
+    echo  Please run the following command to create the environment:
+    echo    conda create -n ai_agent_311 python=3.11
+    echo.
     pause
     exit /b
 )
+echo  [OK] Environment '%CONDA_ENV%' detected.
 
-:: Check if PySide6 is installed
-%PYTHON_EXECUTABLE% -c "import PySide6" >nul 2>&1
+:: 2. Dependency Check
+echo  [*] Checking Dependencies...
+conda run -n %CONDA_ENV% python -c "import PySide6" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [INFO] PySide6 not found, installing dependencies...
-    %PYTHON_EXECUTABLE% -m pip install -r requirements.txt
-    if %errorlevel% neq 0 (
-        echo [ERROR] Failed to install dependencies.
-        echo Please run manually: pip install -r requirements.txt
+    echo  [INFO] Installing missing dependencies...
+    conda run -n %CONDA_ENV% pip install -r requirements.txt
+    if !errorlevel! neq 0 (
+        color 0C
+        echo.
+        echo  [ERROR] Failed to install dependencies.
+        echo  Please run manually: conda run -n ai_agent_311 pip install -r requirements.txt
+        echo.
         pause
         exit /b
     )
+    echo  [OK] Dependencies installed.
+) else (
+    echo  [OK] Dependencies ready.
 )
 
-:: Run main program
-echo Starting main program...
-echo --------------------
-%PYTHON_EXECUTABLE% main.py
+:: 3. Launch Core
+echo.
+echo  ============================================================
+echo  [*] Launching Holographic Console...
+echo  ============================================================
+echo.
 
-:: Check run result
+conda run -n %CONDA_ENV% python main.py
+
 if %errorlevel% neq 0 (
-    echo --------------------
-    echo [ERROR] Program exited with error.
-    echo This may be due to missing dependencies or environment issues.
-    echo Please try running: pip install -r requirements.txt
+    color 0C
+    echo.
+    echo  [ERROR] Program exited with error code: %errorlevel%
+    echo.
     pause
 ) else (
-    echo --------------------
-    echo Program exited normally.
-    pause
+    echo.
+    echo  [INFO] Program exited normally.
+    timeout /t 3 >nul
 )
