@@ -7,12 +7,16 @@ cd /d "%~dp0"
 echo AI Game Agent Launcher
 echo --------------------
 
-:: Check if virtual environment exists
-if exist "venv\Scripts\python.exe" (
-    echo Virtual environment detected, using Python from venv...
-    set PYTHON_EXECUTABLE=venv\Scripts\python.exe
+:: Activate Conda environment
+echo Activating Conda environment (ai_agent_311)...
+call conda activate ai_agent_311
+
+if %errorlevel% neq 0 (
+    echo [WARNING] Failed to activate Conda environment.
+    echo Trying to use system Python...
+    set PYTHON_EXECUTABLE=python
 ) else (
-    echo No virtual environment detected, using system Python...
+    echo Conda environment activated successfully.
     set PYTHON_EXECUTABLE=python
 )
 
@@ -25,14 +29,14 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-:: Check if customtkinter is installed
-%PYTHON_EXECUTABLE% -c "import customtkinter" >nul 2>&1
+:: Check if PySide6 is installed
+%PYTHON_EXECUTABLE% -c "import PySide6" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [INFO] customtkinter not found, installing...
-    %PYTHON_EXECUTABLE% -m pip install customtkinter
+    echo [INFO] PySide6 not found, installing dependencies...
+    %PYTHON_EXECUTABLE% -m pip install -r requirements.txt
     if %errorlevel% neq 0 (
-        echo [ERROR] Failed to install customtkinter.
-        echo Please run manually: pip install customtkinter
+        echo [ERROR] Failed to install dependencies.
+        echo Please run manually: pip install -r requirements.txt
         pause
         exit /b
     )

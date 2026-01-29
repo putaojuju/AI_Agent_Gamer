@@ -9,5 +9,5 @@ numpy
 keyboard
 psutil
 mss
-PySide6
-qdarktheme
+PySide6==6.8.1
+pyqtdarktheme
