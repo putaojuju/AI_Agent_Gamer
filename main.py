@@ -270,6 +270,36 @@ class AICmdCenter(QMainWindow):
         control_layout.addWidget(game_label)
         
         self.game_selector = QComboBox()
+        self.game_selector.setStyleSheet("""
+            QComboBox {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 6px 10px;
+                min-height: 28px;
+            }
+            QComboBox:hover {
+                border-color: #3498db;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #cccccc;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                border: 1px solid #505050;
+                selection-background-color: #3498db;
+                selection-color: #ffffff;
+            }
+        """)
         self.game_selector.currentTextChanged.connect(self._on_game_change)
         control_layout.addWidget(self.game_selector)
         
@@ -281,6 +311,36 @@ class AICmdCenter(QMainWindow):
         win_select_layout = QHBoxLayout()
         
         self.window_selector = QComboBox()
+        self.window_selector.setStyleSheet("""
+            QComboBox {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                padding: 6px 10px;
+                min-height: 28px;
+            }
+            QComboBox:hover {
+                border-color: #3498db;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #cccccc;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                border: 1px solid #505050;
+                selection-background-color: #3498db;
+                selection-color: #ffffff;
+            }
+        """)
         win_select_layout.addWidget(self.window_selector)
         
         refresh_btn = QPushButton("🔄")
